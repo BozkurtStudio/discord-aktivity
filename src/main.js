@@ -80,11 +80,19 @@ function loadAndPlayVideo(originalUrl, startTime = 0, shouldPlay = true) {
   };
 
   if (isHls) {
-    // HLS Proxy
+    // HLS Proxy (M3U8)
     if (Hls.isSupported()) {
-      const hls = new Hls();
+      // M3U8 playlistindeki alt parçaların (.ts) ve yolların doğru bulunması için 
+      // HLS'ye orijinal URL'yi vereceğiz ancak indirme yaparken araya girip Proxy'mize yönlendireceğiz.
+      const hls = new Hls({
+        xhrSetup: function(xhr, url) {
+          const proxiedUrl = `/proxy/stream?url=${encodeURIComponent(url)}`;
+          xhr.open('GET', proxiedUrl, true);
+        }
+      });
       currentHls = hls;
-      hls.loadSource(proxyUrl);
+      // Proxy base_url karmaşasını önlemek için loadSource'a Orijinal URL verilir
+      hls.loadSource(originalUrl);
       hls.attachMedia(videoPlayer);
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         videoPlayer.currentTime = startTime;
@@ -94,7 +102,8 @@ function loadAndPlayVideo(originalUrl, startTime = 0, shouldPlay = true) {
         console.error("HLS Hatası:", data);
       });
     } else if (videoPlayer.canPlayType('application/vnd.apple.mpegurl')) {
-      videoPlayer.src = proxyUrl;
+      // Apple cihazlardaki (iOS/Safari) Native HLS player proxy yollarını parçaladığı için orijinal URL verilir
+      videoPlayer.src = originalUrl;
       videoPlayer.addEventListener('loadedmetadata', function onLoaded() {
         videoPlayer.removeEventListener('loadedmetadata', onLoaded);
         videoPlayer.currentTime = startTime;
