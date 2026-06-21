@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="tr">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Discord Video Etkinliği</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+
+<body>
+  <div id="app">
+
+    <!-- Durum etiketi -->
+    <div id="status-label" class="status-label host">🎬 Bağlanılıyor...</div>
+
+    <!-- Host paneli -->
+    <div id="host-panel">
+      <input type="text" id="video-url" placeholder="MP4 veya M3U8 URL'sini buraya yapıştırın...">
+      <button id="play-btn">Videoyu Herkese Oynat</button>
+    </div>
+
+    <!-- Yükleme Göstergesi (Buffer) -->
+    <div id="buffering-overlay" class="hidden">
+      <div class="spinner"></div>
+    </div>
+
+    <!-- Autoplay Engeli Overlay -->
+    <div id="autoplay-overlay" class="hidden">
+      <div class="overlay-content">
+        <h3>Video Hazır</h3>
+        <p>Tarayıcınız videoyu otomatik başlatmayı engelledi.</p>
+        <button id="force-play-btn">Videoya Katıl (Oynat)</button>
+      </div>
+    </div>
+
+    <!-- Video oynatıcı -->
+    <video id="video-player"></video>
+
+  </div>
+  <script type="module" src="src/main.js"></script>
+</body>
+
+</html>
