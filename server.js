@@ -175,4 +175,5 @@ io.on('connection', (socket) => {
     });
 });
 
-server.listen(3000, () => console.log('Sunucu ve Soket 3000 portunda aktif!'));
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => console.log(`Sunucu ve Soket ${PORT} portunda aktif!`));
