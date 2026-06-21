@@ -82,16 +82,10 @@ function loadAndPlayVideo(originalUrl, startTime = 0, shouldPlay = true) {
   if (isHls) {
     // HLS Proxy (M3U8)
     if (Hls.isSupported()) {
-      // M3U8 playlistindeki alt parçaların (.ts) ve yolların doğru bulunması için 
-      // HLS'ye orijinal URL'yi vereceğiz ancak indirme yaparken araya girip Proxy'mize yönlendireceğiz.
-      const hls = new Hls({
-        xhrSetup: function(xhr, url) {
-          const proxiedUrl = `/proxy/stream?url=${encodeURIComponent(url)}`;
-          xhr.open('GET', proxiedUrl, true);
-        }
-      });
+      // M3U8 IP kilitlerine takılmamak için proxy DEVRE DIŞI.
+      // Videolar kullanıcının kendi IP'si üzerinden doğrudan hedeften çekilir.
+      const hls = new Hls();
       currentHls = hls;
-      // Proxy base_url karmaşasını önlemek için loadSource'a Orijinal URL verilir
       hls.loadSource(originalUrl);
       hls.attachMedia(videoPlayer);
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
