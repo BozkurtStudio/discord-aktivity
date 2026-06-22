@@ -134,7 +134,8 @@ body {
 }
 
 #autoplay-overlay {
-  pointer-events: auto; /* Autoplay butonunun tıklanabilir olması için */
+  pointer-events: auto;
+  z-index: 30; /* Spinner'ın (z-index:25) üstünde */
 }
 
 .spinner {

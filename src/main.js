@@ -126,17 +126,17 @@ function loadAndPlayVideo(originalUrl, startTime = 0, shouldPlay = true) {
     videoPlayer.muted = false;
     videoPlayer.play().then(() => {
       // Sesli oynatma başarılı
-      autoplayOverlay.classList.add('hidden');
+      hideAutoplayOverlay();
     }).catch(() => {
       // Sesli engellendi → sessiz dene (en azından görüntü gelsin)
       videoPlayer.muted = true;
       videoPlayer.play().then(() => {
         // Sessiz oynatma başarılı, kullanıcıya sesi açması için overlay göster
-        autoplayOverlay.classList.remove('hidden');
+        showAutoplayOverlay();
       }).catch(e2 => {
-        // Her şey engellendi
+        // Her şey engellendi — kullanıcı tıklamalı
         console.warn("Tamamen engellendi:", e2.message);
-        autoplayOverlay.classList.remove('hidden');
+        showAutoplayOverlay();
       });
     });
   };
@@ -206,19 +206,44 @@ function loadAndPlayVideo(originalUrl, startTime = 0, shouldPlay = true) {
 }
 
 // --- OVERLAY ETKİLEŞİMLERİ ---
-forcePlayBtn.addEventListener('click', () => {
+
+// Autoplay overlay gösterildiğinde spinner'ı gizle (üst üste binmesin)
+function showAutoplayOverlay() {
+  bufferingOverlay.classList.add('hidden');
+  autoplayOverlay.classList.remove('hidden');
+}
+
+function hideAutoplayOverlay() {
   autoplayOverlay.classList.add('hidden');
-  videoPlayer.muted = false; // Sesi aç
+}
+
+// "Videoya Katıl" butonuna tıklama
+forcePlayBtn.addEventListener('click', () => {
+  hideAutoplayOverlay();
+  videoPlayer.muted = false;
   videoPlayer.play().catch(e => console.error("Oynatma başarısız:", e));
 });
 
+// Ekranın herhangi bir yerine tıklayınca da videoyu başlat
+// (Bazı kullanıcılar butonu göremeyebilir veya mobilde olabilir)
+videoPlayer.addEventListener('click', () => {
+  if (!autoplayOverlay.classList.contains('hidden')) {
+    hideAutoplayOverlay();
+    videoPlayer.muted = false;
+    videoPlayer.play().catch(e => console.error("Oynatma başarısız:", e));
+  }
+});
+
 videoPlayer.addEventListener('waiting', () => {
-  if (isHost) return; // Host kullanıcıda özel buffer gösterme
+  if (isHost) return;
+  // Autoplay overlay açıksa spinner gösterme (üst üste binmesin)
+  if (!autoplayOverlay.classList.contains('hidden')) return;
   bufferingOverlay.classList.remove('hidden');
 });
 
 videoPlayer.addEventListener('playing', () => {
   bufferingOverlay.classList.add('hidden');
+  hideAutoplayOverlay();
 });
 
 // --- İZLEYİCİ PROGRESS BAR YÖNETİMİ ---
@@ -384,7 +409,7 @@ socket.on('onVideoStateChange', async (data) => {
     videoPlayer.currentTime = data.currentTime;
     if (data.action === 'play') {
       await videoPlayer.play().catch(e => {
-        if (e.name === 'NotAllowedError') autoplayOverlay.classList.remove('hidden');
+        if (e.name === 'NotAllowedError') showAutoplayOverlay();
       });
     } else if (data.action === 'pause') {
       videoPlayer.pause();
@@ -406,7 +431,7 @@ socket.on('onHeartbeat', (data) => {
   if (data.isPlaying && videoPlayer.paused) {
     startSync();
     videoPlayer.play().catch(e => {
-      if (e.name === 'NotAllowedError') autoplayOverlay.classList.remove('hidden');
+      if (e.name === 'NotAllowedError') showAutoplayOverlay();
     });
     setTimeout(() => endSync(), 300);
   } else if (!data.isPlaying && !videoPlayer.paused) {
