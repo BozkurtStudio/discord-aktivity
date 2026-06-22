@@ -51,9 +51,29 @@ async function setupDiscordSdk() {
   await discordSdk.ready();
   currentChannelId = discordSdk.channelId;
 
+  // Group DM'de guildId null olur - bunu handle etmek gerekiyor
+  const isGDM = discordSdk.guildId === null;
+
   if (currentChannelId) {
     socket.emit('joinRoom', currentChannelId);
   }
+
+  // Authorize'da GDM için doğru scope'ları gönder
+  const { code } = await discordSdk.commands.authorize({
+    client_id: "1518311302097797233",
+    response_type: "code",
+    state: "",
+    prompt: "none",
+    scope: [
+      "identify",
+      "guilds",
+      "applications.commands",
+      // GDM'de guild yok, onu özellikle belirt
+    ].filter(scope => {
+      if (scope === "guilds" && isGDM) return false;
+      return true;
+    }),
+  });
 }
 
 // --- VIDEO YÜKLEME ---
@@ -154,7 +174,7 @@ function formatTime(seconds) {
 videoPlayer.addEventListener('timeupdate', () => {
   // Sadece izleyicilere gösterilecek, Host'un kendi çubuğu var
   if (isHost || !videoPlayer.duration) return;
-  
+
   if (viewerProgressContainer.classList.contains('hidden')) {
     viewerProgressContainer.classList.remove('hidden');
   }
