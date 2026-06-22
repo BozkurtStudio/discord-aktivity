@@ -33,12 +33,12 @@ function resetIdleTimer() {
   appContainer.classList.remove('idle');
   clearTimeout(idleTimeout);
 
-  // 2.5 saniye hareketsizlik sonrası, eğer video oynuyorsa arayüzü gizle
+  // 1.3 saniye hareketsizlik sonrası, eğer video oynuyorsa arayüzü gizle
   idleTimeout = setTimeout(() => {
     if (!videoPlayer.paused) {
       appContainer.classList.add('idle');
     }
-  }, 2500);
+  }, 1300);
 }
 
 // Fare hareketi veya tuşa basıldığında sayacı sıfırla
