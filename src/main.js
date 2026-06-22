@@ -13,8 +13,7 @@ const playBtn = document.getElementById('play-btn');
 const hostPanel = document.getElementById('host-panel');
 const statusLabel = document.getElementById('status-label');
 const bufferingOverlay = document.getElementById('buffering-overlay');
-const autoplayOverlay = document.getElementById('autoplay-overlay');
-const forcePlayBtn = document.getElementById('force-play-btn');
+const unmuteBtn = document.getElementById('unmute-btn');
 const viewerProgressContainer = document.getElementById('viewer-progress-container');
 const viewerProgressBar = document.getElementById('viewer-progress-bar');
 const viewerTime = document.getElementById('viewer-time');
@@ -117,27 +116,11 @@ function loadAndPlayVideo(originalUrl, startTime = 0, shouldPlay = true) {
   const isHls = originalUrl.includes('.m3u8');
 
   // Güvenli Oynatma Denemesi:
-  // 1) Önce sesli dene
-  // 2) Tarayıcı engellerse → sessiz (muted) başlat + overlay göster
-  // 3) O da olmazsa → overlay göster, kullanıcı tıklasın
   const attemptPlay = () => {
     if (!shouldPlay) return;
 
-    videoPlayer.muted = false;
-    videoPlayer.play().then(() => {
-      // Sesli oynatma başarılı
-      hideAutoplayOverlay();
-    }).catch(() => {
-      // Sesli engellendi → sessiz dene (en azından görüntü gelsin)
-      videoPlayer.muted = true;
-      videoPlayer.play().then(() => {
-        // Sessiz oynatma başarılı, kullanıcıya sesi açması için overlay göster
-        showAutoplayOverlay();
-      }).catch(e2 => {
-        // Her şey engellendi — kullanıcı tıklamalı
-        console.warn("Tamamen engellendi:", e2.message);
-        showAutoplayOverlay();
-      });
+    videoPlayer.play().catch(e => {
+      console.warn("Otomatik oynatma engellendi (Muted başlatılmasına rağmen):", e.message);
     });
   };
 
@@ -207,43 +190,26 @@ function loadAndPlayVideo(originalUrl, startTime = 0, shouldPlay = true) {
 
 // --- OVERLAY ETKİLEŞİMLERİ ---
 
-// Autoplay overlay gösterildiğinde spinner'ı gizle (üst üste binmesin)
-function showAutoplayOverlay() {
-  bufferingOverlay.classList.add('hidden');
-  autoplayOverlay.classList.remove('hidden');
-}
+// --- OVERLAY ETKİLEŞİMLERİ ---
 
-function hideAutoplayOverlay() {
-  autoplayOverlay.classList.add('hidden');
-}
-
-// "Videoya Katıl" butonuna tıklama
-forcePlayBtn.addEventListener('click', () => {
-  hideAutoplayOverlay();
+// İzleyiciler için ses açma butonu
+unmuteBtn.addEventListener('click', () => {
   videoPlayer.muted = false;
-  videoPlayer.play().catch(e => console.error("Oynatma başarısız:", e));
+  unmuteBtn.classList.add('hidden');
 });
 
-// Ekranın herhangi bir yerine tıklayınca da videoyu başlat
-// (Bazı kullanıcılar butonu göremeyebilir veya mobilde olabilir)
-videoPlayer.addEventListener('click', () => {
-  if (!autoplayOverlay.classList.contains('hidden')) {
-    hideAutoplayOverlay();
-    videoPlayer.muted = false;
-    videoPlayer.play().catch(e => console.error("Oynatma başarısız:", e));
-  }
+// Eğer kullanıcı bir şekilde sesi açarsa (veya sesli oynamaya izin verilmişse) butonu gizle
+videoPlayer.addEventListener('volumechange', () => {
+  if (!videoPlayer.muted) unmuteBtn.classList.add('hidden');
 });
 
 videoPlayer.addEventListener('waiting', () => {
   if (isHost) return;
-  // Autoplay overlay açıksa spinner gösterme (üst üste binmesin)
-  if (!autoplayOverlay.classList.contains('hidden')) return;
   bufferingOverlay.classList.remove('hidden');
 });
 
 videoPlayer.addEventListener('playing', () => {
   bufferingOverlay.classList.add('hidden');
-  hideAutoplayOverlay();
 });
 
 // --- İZLEYİCİ PROGRESS BAR YÖNETİMİ ---
@@ -306,11 +272,14 @@ function updateUI() {
     statusLabel.textContent = '🎬Host — videoyu kontrol edebilirsin';
     statusLabel.className = 'status-label host';
     videoPlayer.controls = true;
+    videoPlayer.muted = false; // Host'un sesi her zaman açık başlar
+    unmuteBtn.classList.add('hidden');
   } else {
     hostPanel.classList.add('hidden');
-    statusLabel.textContent = '👁 İzleyici — Video başlamadıysa ekrana 1-2 kez tıkla';
+    statusLabel.textContent = '👁 İzleyici Modu';
     statusLabel.className = 'status-label viewer';
     videoPlayer.controls = false;
+    if (videoPlayer.muted) unmuteBtn.classList.remove('hidden');
   }
 }
 
@@ -408,9 +377,7 @@ socket.on('onVideoStateChange', async (data) => {
   } else {
     videoPlayer.currentTime = data.currentTime;
     if (data.action === 'play') {
-      await videoPlayer.play().catch(e => {
-        if (e.name === 'NotAllowedError') showAutoplayOverlay();
-      });
+      await videoPlayer.play().catch(e => console.error(e));
     } else if (data.action === 'pause') {
       videoPlayer.pause();
     }
@@ -430,9 +397,7 @@ socket.on('onHeartbeat', (data) => {
 
   if (data.isPlaying && videoPlayer.paused) {
     startSync();
-    videoPlayer.play().catch(e => {
-      if (e.name === 'NotAllowedError') showAutoplayOverlay();
-    });
+    videoPlayer.play().catch(e => console.error(e));
     setTimeout(() => endSync(), 300);
   } else if (!data.isPlaying && !videoPlayer.paused) {
     startSync();

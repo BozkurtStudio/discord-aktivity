@@ -25,14 +25,8 @@
       <div class="spinner"></div>
     </div>
 
-    <!-- Autoplay Engeli Overlay -->
-    <div id="autoplay-overlay" class="hidden">
-      <div class="overlay-content">
-        <h3>🎬 Video Hazır</h3>
-        <p>Videoyu başlatmak için aşağıdaki butona veya ekrana tıklayın.</p>
-        <button id="force-play-btn">▶ Videoyu Başlat</button>
-      </div>
-    </div>
+    <!-- Ses Açma Butonu (İzleyiciler için) -->
+    <button id="unmute-btn" class="hidden">🔇 Sesi Aç</button>
 
     <!-- İzleyici İlerleme Çubuğu -->
     <div id="viewer-progress-container" class="hidden">
@@ -43,7 +37,7 @@
     </div>
 
     <!-- Video oynatıcı -->
-    <video id="video-player"></video>
+    <video id="video-player" muted></video>
 
   </div>
   <script type="module" src="src/main.js"></script>
