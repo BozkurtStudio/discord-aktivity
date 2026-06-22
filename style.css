@@ -214,7 +214,7 @@ body {
 #viewer-progress-bar {
   height: 100%;
   width: 0%;
-  background: linear-gradient(90deg, #5865F2, #eb459e);
+  background: #5865F2;
   border-radius: 4px;
   transition: width 0.2s linear;
 }
