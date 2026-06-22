@@ -15,6 +15,9 @@ const statusLabel = document.getElementById('status-label');
 const bufferingOverlay = document.getElementById('buffering-overlay');
 const autoplayOverlay = document.getElementById('autoplay-overlay');
 const forcePlayBtn = document.getElementById('force-play-btn');
+const viewerProgressContainer = document.getElementById('viewer-progress-container');
+const viewerProgressBar = document.getElementById('viewer-progress-bar');
+const viewerTime = document.getElementById('viewer-time');
 
 let currentChannelId = null;
 let isHost = false;
@@ -137,6 +140,28 @@ videoPlayer.addEventListener('waiting', () => {
 
 videoPlayer.addEventListener('playing', () => {
   bufferingOverlay.classList.add('hidden');
+});
+
+// --- İZLEYİCİ PROGRESS BAR YÖNETİMİ ---
+function formatTime(seconds) {
+  if (isNaN(seconds) || !isFinite(seconds)) return "00:00";
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60).toString().padStart(2, '0');
+  const s = Math.floor(seconds % 60).toString().padStart(2, '0');
+  return h > 0 ? `${h}:${m}:${s}` : `${m}:${s}`;
+}
+
+videoPlayer.addEventListener('timeupdate', () => {
+  // Sadece izleyicilere gösterilecek, Host'un kendi çubuğu var
+  if (isHost || !videoPlayer.duration) return;
+  
+  if (viewerProgressContainer.classList.contains('hidden')) {
+    viewerProgressContainer.classList.remove('hidden');
+  }
+
+  const percent = (videoPlayer.currentTime / videoPlayer.duration) * 100;
+  viewerProgressBar.style.width = `${percent}%`;
+  viewerTime.textContent = `${formatTime(videoPlayer.currentTime)} / ${formatTime(videoPlayer.duration)}`;
 });
 
 // --- isSyncing KİLİT MEKANİZMASI ---

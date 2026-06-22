@@ -172,3 +172,58 @@ body {
   transition: background-color 0.2s ease;
 }
 #force-play-btn:hover { background-color: #4752c4; }
+
+/* İzleyici İlerleme Çubuğu (Progress Bar) */
+#viewer-progress-container {
+  position: absolute;
+  bottom: 30px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 80%;
+  max-width: 700px;
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  background: rgba(43, 45, 49, 0.85);
+  padding: 12px 20px;
+  border-radius: 12px;
+  z-index: 20;
+  transition: opacity 0.3s ease, transform 0.3s ease;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+  pointer-events: none; /* İzleyiciler sadece görebilir, tıklayamaz */
+}
+
+#viewer-progress-container.hidden {
+  display: none;
+}
+
+#app.idle #viewer-progress-container {
+  opacity: 0;
+  transform: translateX(-50%) translateY(15px);
+}
+
+.progress-track {
+  flex-grow: 1;
+  height: 8px;
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+#viewer-progress-bar {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #5865F2, #eb459e);
+  border-radius: 4px;
+  transition: width 0.2s linear;
+}
+
+#viewer-time {
+  color: #f2f3f5;
+  font-size: 14px;
+  font-family: 'Inter', sans-serif;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  font-weight: 500;
+}
