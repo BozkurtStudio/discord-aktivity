@@ -29,7 +29,7 @@ let idleTimeout = null;
 function resetIdleTimer() {
   appContainer.classList.remove('idle');
   clearTimeout(idleTimeout);
-  
+
   // 2.5 saniye hareketsizlik sonrası, eğer video oynuyorsa arayüzü gizle
   idleTimeout = setTimeout(() => {
     if (!videoPlayer.paused) {
@@ -85,7 +85,7 @@ function loadAndPlayVideo(originalUrl, startTime = 0, shouldPlay = true) {
       // M3U8 playlistindeki alt parçaların (.ts) ve yolların doğru bulunması için 
       // HLS'ye orijinal URL'yi vereceğiz ancak indirme yaparken araya girip Proxy'mize yönlendireceğiz.
       const hls = new Hls({
-        xhrSetup: function(xhr, url) {
+        xhrSetup: function (xhr, url) {
           const proxiedUrl = `/proxy/stream?url=${encodeURIComponent(url)}`;
           xhr.open('GET', proxiedUrl, true);
         }
@@ -174,12 +174,12 @@ function seekAndWait(time) {
 function updateUI() {
   if (isHost) {
     hostPanel.classList.remove('hidden');
-    statusLabel.textContent = '🎬 Sen Host\'sun — videoyu kontrol edebilirsin';
+    statusLabel.textContent = '🎬Host — videoyu kontrol edebilirsin';
     statusLabel.className = 'status-label host';
     videoPlayer.controls = true;
   } else {
     hostPanel.classList.add('hidden');
-    statusLabel.textContent = '👁 İzleyici modu — sadece host videoyu kontrol edebilir';
+    statusLabel.textContent = '👁 İzleyici — Video başlamadıysa ekrana 1-2 kez tıkla';
     statusLabel.className = 'status-label viewer';
     videoPlayer.controls = false;
   }
