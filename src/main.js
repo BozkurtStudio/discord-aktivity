@@ -91,22 +91,40 @@ function loadAndPlayVideo(originalUrl, startTime = 0, shouldPlay = true) {
   const proxyUrl = `/proxy/stream?url=${encodeURIComponent(originalUrl)}`;
   const isHls = originalUrl.includes('.m3u8');
 
-  // Ortak Oynatma Denemesi (Autoplay kontrolü)
+  // Güvenli Oynatma Denemesi:
+  // 1) Önce sesli dene
+  // 2) Tarayıcı engellerse → sessiz (muted) başlat + overlay göster
+  // 3) O da olmazsa → overlay göster, kullanıcı tıklasın
   const attemptPlay = () => {
     if (!shouldPlay) return;
-    videoPlayer.play().catch(e => {
-      console.warn("Otomatik oynatma engellendi:", e.message);
-      if (e.name === 'NotAllowedError') {
+
+    videoPlayer.muted = false;
+    videoPlayer.play().then(() => {
+      // Sesli oynatma başarılı
+      autoplayOverlay.classList.add('hidden');
+    }).catch(() => {
+      // Sesli engellendi → sessiz dene (en azından görüntü gelsin)
+      videoPlayer.muted = true;
+      videoPlayer.play().then(() => {
+        // Sessiz oynatma başarılı, kullanıcıya sesi açması için overlay göster
         autoplayOverlay.classList.remove('hidden');
-      }
+      }).catch(e2 => {
+        // Her şey engellendi
+        console.warn("Tamamen engellendi:", e2.message);
+        autoplayOverlay.classList.remove('hidden');
+      });
     });
+  };
+
+  // Ortak "video hazır" callback'i
+  const onVideoReady = () => {
+    videoPlayer.currentTime = startTime;
+    attemptPlay();
   };
 
   if (isHls) {
     // HLS Proxy (M3U8)
     if (Hls.isSupported()) {
-      // M3U8 playlistindeki alt parçaların (.ts) ve yolların doğru bulunması için 
-      // HLS'ye orijinal URL'yi vereceğiz ancak indirme yaparken araya girip Proxy'mize yönlendireceğiz.
       const hls = new Hls({
         xhrSetup: function (xhr, url) {
           const proxiedUrl = `/proxy/stream?url=${encodeURIComponent(url)}`;
@@ -116,29 +134,44 @@ function loadAndPlayVideo(originalUrl, startTime = 0, shouldPlay = true) {
       currentHls = hls;
       hls.loadSource(originalUrl);
       hls.attachMedia(videoPlayer);
-      hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        videoPlayer.currentTime = startTime;
-        attemptPlay();
-      });
+      hls.on(Hls.Events.MANIFEST_PARSED, onVideoReady);
       hls.on(Hls.Events.ERROR, (event, data) => {
         console.error("HLS Hatası:", data);
+        if (data.fatal) {
+          // Fatal hatalarda HLS'yi yeniden başlatmayı dene
+          if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+            console.log("Ağ hatası, yeniden deneniyor...");
+            hls.startLoad();
+          } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+            console.log("Medya hatası, kurtarılıyor...");
+            hls.recoverMediaError();
+          }
+        }
       });
     } else if (videoPlayer.canPlayType('application/vnd.apple.mpegurl')) {
       videoPlayer.src = proxyUrl;
-      videoPlayer.addEventListener('loadedmetadata', function onLoaded() {
-        videoPlayer.removeEventListener('loadedmetadata', onLoaded);
-        videoPlayer.currentTime = startTime;
-        attemptPlay();
+      videoPlayer.addEventListener('canplay', function onReady() {
+        videoPlayer.removeEventListener('canplay', onReady);
+        onVideoReady();
       });
     }
   } else {
     // MP4/WebM vb.
     videoPlayer.src = proxyUrl;
-    videoPlayer.addEventListener('loadedmetadata', function onLoaded() {
-      videoPlayer.removeEventListener('loadedmetadata', onLoaded);
-      videoPlayer.currentTime = startTime;
-      attemptPlay();
+
+    // canplay: Video oynatılabilecek kadar buffer doldu
+    videoPlayer.addEventListener('canplay', function onReady() {
+      videoPlayer.removeEventListener('canplay', onReady);
+      onVideoReady();
     });
+
+    // Güvenlik ağı: 8 saniye içinde canplay gelmezse yine de dene
+    setTimeout(() => {
+      if (videoPlayer.readyState < 3 && videoPlayer.src) {
+        console.warn("canplay zaman aşımı, zorla deneniyor...");
+        onVideoReady();
+      }
+    }, 8000);
 
     videoPlayer.onerror = () => {
       const err = videoPlayer.error;
@@ -150,6 +183,7 @@ function loadAndPlayVideo(originalUrl, startTime = 0, shouldPlay = true) {
 // --- OVERLAY ETKİLEŞİMLERİ ---
 forcePlayBtn.addEventListener('click', () => {
   autoplayOverlay.classList.add('hidden');
+  videoPlayer.muted = false; // Sesi aç
   videoPlayer.play().catch(e => console.error("Oynatma başarısız:", e));
 });
 
