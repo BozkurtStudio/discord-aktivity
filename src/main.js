@@ -50,13 +50,13 @@ window.addEventListener('keydown', resetIdleTimer);
 async function setupDiscordSdk() {
   await discordSdk.ready();
   currentChannelId = discordSdk.channelId;
+  console.log("[SDK] Discord SDK hazır, channelId:", currentChannelId);
 
   // Group DM'de guildId null olur - bunu handle etmek gerekiyor
   const isGDM = discordSdk.guildId === null;
 
-  if (currentChannelId) {
-    socket.emit('joinRoom', currentChannelId);
-  }
+  // Odaya katıl (socket hazırsa hemen, değilse bağlanınca)
+  joinRoomWhenReady();
 
   // Authorize'da GDM için doğru scope'ları gönder
   const { code } = await discordSdk.commands.authorize({
@@ -68,13 +68,38 @@ async function setupDiscordSdk() {
       "identify",
       "guilds",
       "applications.commands",
-      // GDM'de guild yok, onu özellikle belirt
     ].filter(scope => {
       if (scope === "guilds" && isGDM) return false;
       return true;
     }),
   });
 }
+
+// Socket hazır olduğunda odaya katıl
+function joinRoomWhenReady() {
+  if (!currentChannelId) return;
+
+  if (socket.connected) {
+    console.log("[Socket] Odaya katılınıyor:", currentChannelId);
+    socket.emit('joinRoom', currentChannelId);
+  } else {
+    console.log("[Socket] Bağlantı bekleniyor...");
+    // Socket henüz bağlanmadıysa, bağlandığında otomatik katıl
+    socket.once('connect', () => {
+      console.log("[Socket] Bağlantı kuruldu, odaya katılınıyor:", currentChannelId);
+      socket.emit('joinRoom', currentChannelId);
+    });
+  }
+}
+
+// Socket.io yeniden bağlantı kurduğunda odaya tekrar katıl
+// (İnternet kesintisi, uyku modu vb. durumlardan sonra)
+socket.on('connect', () => {
+  if (currentChannelId) {
+    console.log("[Socket] Yeniden bağlandı, odaya tekrar katılınıyor...");
+    socket.emit('joinRoom', currentChannelId);
+  }
+});
 
 // --- VIDEO YÜKLEME ---
 // Tüm videolar kendi backend proxy'miz üzerinden yüklenir
