@@ -157,7 +157,10 @@ function loadAndPlayVideo(originalUrl, startTime = 0, shouldPlay = true) {
         }
       });
     } else if (videoPlayer.canPlayType('application/vnd.apple.mpegurl')) {
-      videoPlayer.src = proxyUrl;
+      // ÖNEMLİ: Apple (iOS/Mac Safari) cihazları M3U8 dosyalarını kendisi çözer (Native Player).
+      // ProxyUrl verirsek .ts (video parçaları) yollarını şaşırır, 404 hatası alır ve 
+      // siyah ekranda (sadece spinner dönerek) takılı kalır. Bu yüzden onlara orijinal URL veriyoruz.
+      videoPlayer.src = originalUrl;
       videoPlayer.addEventListener('canplay', function onReady() {
         videoPlayer.removeEventListener('canplay', onReady);
         onVideoReady();
@@ -184,6 +187,11 @@ function loadAndPlayVideo(originalUrl, startTime = 0, shouldPlay = true) {
     videoPlayer.onerror = () => {
       const err = videoPlayer.error;
       console.error(`Video yükleme hatası: code=${err ? err.code : '?'}, message=${err ? err.message : '?'}`);
+      if (!isHost) {
+        statusLabel.textContent = `❌ Hata: Video cihazınızda oynatılamadı (Codec/Ağ).`;
+        statusLabel.style.backgroundColor = "#da373c";
+        bufferingOverlay.classList.add('hidden');
+      }
     };
   }
 }
@@ -205,10 +213,15 @@ videoPlayer.addEventListener('volumechange', () => {
 
 videoPlayer.addEventListener('waiting', () => {
   if (isHost) return;
+  if (videoPlayer.paused) return; // Duraklatmada spinner gösterme
   bufferingOverlay.classList.remove('hidden');
 });
 
 videoPlayer.addEventListener('playing', () => {
+  bufferingOverlay.classList.add('hidden');
+});
+
+videoPlayer.addEventListener('pause', () => {
   bufferingOverlay.classList.add('hidden');
 });
 
