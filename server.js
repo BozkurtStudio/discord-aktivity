@@ -3,6 +3,8 @@ import http from 'http';
 import https from 'https';
 import { URL } from 'url';
 import { Server } from 'socket.io';
+import { buildProxyHeaders, assertSafeUrl } from './server/net.js';
+import { resolveVideoUrl, ResolveError } from './server/resolve.js';
 
 const app = express();
 const server = http.createServer(app);
@@ -17,23 +19,24 @@ app.use(express.static('dist'));
 // SAYDAM (TRANSPARENT) PROXY KÖPRÜSÜ
 // Diski doldurmaz. Tarayıcının 'Range' isteklerini doğrudan kaynağa yollar.
 // ============================================================
-function proxyRequest(targetUrl, reqHeaders, res, maxRedirects = 5) {
-    const parsedUrl = new URL(targetUrl);
-    const protocol = parsedUrl.protocol === 'https:' ? https : http;
+function proxyRequest(targetUrl, reqHeaders, res, referer = null, maxRedirects = 5) {
+    let parsedUrl;
+    let options;
 
-    const options = {
-        headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
-            'Accept': '*/*',
-            'Connection': 'keep-alive',
-            'Referer': 'https://pixeldrain.com/'
-        }
-    };
-
-    // Tarayıcıdan gelen 'Range' isteğini (İleri/geri sarma veya dosya sonu okuma) hedefe aynen ilet
-    if (reqHeaders.range) {
-        options.headers['Range'] = reqHeaders.range;
+    try {
+        parsedUrl = assertSafeUrl(targetUrl);
+        options = {
+            headers: buildProxyHeaders(targetUrl, {
+                range: reqHeaders.range,
+                referer,
+            }),
+        };
+    } catch (err) {
+        if (!res.headersSent) res.status(400).send(err.message);
+        return;
     }
+
+    const protocol = parsedUrl.protocol === 'https:' ? https : http;
 
     const proxyReq = protocol.get(targetUrl, options, (proxyRes) => {
         // Yönlendirme (Redirect) takibi
@@ -43,7 +46,7 @@ function proxyRequest(targetUrl, reqHeaders, res, maxRedirects = 5) {
                 nextUrl = new URL(nextUrl, targetUrl).href;
             }
             proxyReq.destroy();
-            proxyRequest(nextUrl, reqHeaders, res, maxRedirects - 1);
+            proxyRequest(nextUrl, reqHeaders, res, referer, maxRedirects - 1);
         } else {
             // Hedef sunucudan gelen header'ları temizleyip bizim tarayıcıya aktar
             const safeHeaders = {
@@ -54,6 +57,7 @@ function proxyRequest(targetUrl, reqHeaders, res, maxRedirects = 5) {
             if (proxyRes.headers['content-length']) safeHeaders['Content-Length'] = proxyRes.headers['content-length'];
             if (proxyRes.headers['content-range']) safeHeaders['Content-Range'] = proxyRes.headers['content-range'];
             if (proxyRes.headers['accept-ranges']) safeHeaders['Accept-Ranges'] = proxyRes.headers['accept-ranges'];
+            if (proxyRes.headers['cache-control']) safeHeaders['Cache-Control'] = proxyRes.headers['cache-control'];
 
             res.writeHead(proxyRes.statusCode, safeHeaders);
 
@@ -74,9 +78,43 @@ function proxyRequest(targetUrl, reqHeaders, res, maxRedirects = 5) {
 }
 
 app.get('/proxy/stream', (req, res) => {
-    const url = req.query.url;
+    const url = typeof req.query.url === 'string' ? req.query.url : null;
+    const referer = typeof req.query.ref === 'string' ? req.query.ref : null;
     if (!url) return res.status(400).send("URL belirtilmedi.");
-    proxyRequest(url, req.headers, res);
+
+    try {
+        assertSafeUrl(url);
+        if (referer) assertSafeUrl(referer);
+    } catch (err) {
+        return res.status(400).send(err.message);
+    }
+
+    proxyRequest(url, req.headers, res, referer);
+});
+
+// ============================================================
+// EMBED ÇÖZÜMLEYİCİ
+// Host'un yapıştırdığı embed/izleme linkini doğrudan mp4/m3u8 adresine çevirir.
+// ============================================================
+app.get('/api/resolve', async (req, res) => {
+    const url = typeof req.query.url === 'string' ? req.query.url : '';
+
+    if (!url.trim()) {
+        return res.status(400).json({ error: 'URL belirtilmedi.' });
+    }
+
+    try {
+        const result = await resolveVideoUrl(url);
+        console.log(`[Resolve] ${url} -> ${result.url} (${result.source})`);
+        res.json(result);
+    } catch (err) {
+        console.error('[Resolve] Hata:', err.message);
+        res.status(422).json({
+            error: err instanceof ResolveError
+                ? err.message
+                : 'Embed adresi çözümlenemedi. Linki kontrol edin.',
+        });
+    }
 });
 
 
@@ -84,7 +122,15 @@ app.get('/proxy/stream', (req, res) => {
 const roomState = new Map();
 
 function createRoomState(hostSocketId) {
-    return { hostSocketId, videoUrl: null, isPlaying: false, currentTime: 0, lastUpdateTimestamp: Date.now() };
+    return {
+        hostSocketId,
+        videoUrl: null,
+        videoType: null,
+        referer: null,
+        isPlaying: false,
+        currentTime: 0,
+        lastUpdateTimestamp: Date.now()
+    };
 }
 
 function broadcastHostStatus(channelId) {
@@ -117,20 +163,28 @@ io.on('connection', (socket) => {
             roomState.set(channelId, state);
         } else {
             const estimatedTime = getEstimatedCurrentTime(state);
-            socket.emit('onSyncState', { videoUrl: state.videoUrl, currentTime: estimatedTime, isPlaying: state.isPlaying });
+            socket.emit('onSyncState', {
+                videoUrl: state.videoUrl,
+                videoType: state.videoType,
+                referer: state.referer,
+                currentTime: estimatedTime,
+                isPlaying: state.isPlaying
+            });
         }
         broadcastHostStatus(channelId);
     });
 
-    socket.on('videoLoad', ({ channelId, url }) => {
+    socket.on('videoLoad', ({ channelId, url, referer, type }) => {
         const state = roomState.get(channelId);
         if (!state || state.hostSocketId !== socket.id) return;
 
         state.videoUrl = url;
+        state.videoType = type || null;
+        state.referer = referer || null;
         state.currentTime = 0;
         state.isPlaying = true;
         state.lastUpdateTimestamp = Date.now();
-        io.to(channelId).emit('onVideoLoad', { url });
+        io.to(channelId).emit('onVideoLoad', { url, referer: state.referer, type: state.videoType });
     });
 
     socket.on('videoState', ({ channelId, action, currentTime }) => {

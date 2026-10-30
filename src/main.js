@@ -24,6 +24,7 @@ let isSyncing = false;
 let syncCounter = 0;
 let currentHls = null;
 let heartbeatInterval = null;
+let currentLoadId = 0;
 
 // --- IDLE (BOŞTA) ARAYÜZ GİZLEME MANTIĞI ---
 let idleTimeout = null;
@@ -101,8 +102,11 @@ socket.on('connect', () => {
 });
 
 // --- VIDEO YÜKLEME ---
-// Tüm videolar kendi backend proxy'miz üzerinden yüklenir
-function loadAndPlayVideo(originalUrl, startTime = 0, shouldPlay = true) {
+// Tüm videolar kendi backend proxy'miz üzerinden yüklenir.
+// referer: embed sayfasının adresi (bazı kaynaklar Referer olmadan 403 veriyor)
+function loadAndPlayVideo(originalUrl, startTime = 0, shouldPlay = true, referer = null, type = null) {
+  const loadId = ++currentLoadId;
+
   if (currentHls) {
     currentHls.destroy();
     currentHls = null;
@@ -112,8 +116,16 @@ function loadAndPlayVideo(originalUrl, startTime = 0, shouldPlay = true) {
   videoPlayer.removeAttribute('src');
   videoPlayer.load();
 
-  const proxyUrl = `/proxy/stream?url=${encodeURIComponent(originalUrl)}`;
-  const isHls = originalUrl.includes('.m3u8');
+  const isHls = type ? type === 'hls' : /\.m3u8(?:$|[?#])/i.test(originalUrl);
+  const ref = referer || null;
+
+  const proxied = (targetUrl) => {
+    let url = `/proxy/stream?url=${encodeURIComponent(targetUrl)}`;
+    if (ref) url += `&ref=${encodeURIComponent(ref)}`;
+    return url;
+  };
+
+  const proxyUrl = proxied(originalUrl);
 
   // Güvenli Oynatma Denemesi:
   const attemptPlay = () => {
@@ -126,6 +138,7 @@ function loadAndPlayVideo(originalUrl, startTime = 0, shouldPlay = true) {
 
   // Ortak "video hazır" callback'i
   const onVideoReady = () => {
+    if (loadId !== currentLoadId) return;
     videoPlayer.currentTime = startTime;
     attemptPlay();
   };
@@ -135,8 +148,9 @@ function loadAndPlayVideo(originalUrl, startTime = 0, shouldPlay = true) {
     if (Hls.isSupported()) {
       const hls = new Hls({
         xhrSetup: function (xhr, url) {
-          const proxiedUrl = `/proxy/stream?url=${encodeURIComponent(url)}`;
-          xhr.open('GET', proxiedUrl, true);
+          // data:/blob: adresleri (ör. gömülü anahtarlar) proxy'lenmemeli
+          if (/^(?:data|blob):/i.test(url)) return;
+          xhr.open('GET', proxied(url), true);
         }
       });
       currentHls = hls;
@@ -178,6 +192,7 @@ function loadAndPlayVideo(originalUrl, startTime = 0, shouldPlay = true) {
 
     // Güvenlik ağı: 8 saniye içinde canplay gelmezse yine de dene
     setTimeout(() => {
+      if (loadId !== currentLoadId) return;
       if (videoPlayer.readyState < 3 && videoPlayer.src) {
         console.warn("canplay zaman aşımı, zorla deneniyor...");
         onVideoReady();
@@ -279,6 +294,12 @@ function seekAndWait(time) {
 }
 
 // --- UI ---
+function setStatus(text, kind = 'host') {
+  statusLabel.textContent = text;
+  statusLabel.className = `status-label ${kind}`;
+  statusLabel.style.backgroundColor = '';
+}
+
 function updateUI() {
   if (isHost) {
     hostPanel.classList.remove('hidden');
@@ -321,12 +342,41 @@ function stopHeartbeat() {
 // 1. KULLANICI ETKİLEŞİMLERİ
 // =============================================
 
-playBtn.addEventListener('click', () => {
+playBtn.addEventListener('click', async () => {
   if (!isHost) return;
-  const url = videoUrlInput.value.trim();
-  if (!url) return alert("Lütfen bir video URL'si girin!");
 
-  socket.emit('videoLoad', { channelId: currentChannelId, url });
+  const input = videoUrlInput.value.trim();
+  if (!input) return alert("Lütfen bir video veya embed URL'si girin!");
+
+  const previousLabel = playBtn.textContent;
+  playBtn.disabled = true;
+  playBtn.textContent = 'Çözümleniyor...';
+  setStatus('🔎 Kaynak çözümleniyor...', 'host');
+
+  try {
+    const response = await fetch(`/api/resolve?url=${encodeURIComponent(input)}`);
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      throw new Error(data.error || 'Kaynak çözümlenemedi.');
+    }
+
+    socket.emit('videoLoad', {
+      channelId: currentChannelId,
+      url: data.url,
+      referer: data.referer || null,
+      type: data.type || null
+    });
+
+    setStatus(`🎬 Host — ${data.source || 'Kaynak hazır'}`, 'host');
+  } catch (err) {
+    console.error('[Resolve]', err);
+    setStatus(`❌ ${err.message}`, 'error');
+    bufferingOverlay.classList.add('hidden');
+  } finally {
+    playBtn.disabled = false;
+    playBtn.textContent = previousLabel;
+  }
 });
 
 videoPlayer.addEventListener('play', () => {
@@ -371,14 +421,14 @@ socket.on('hostStatus', (status) => {
 
 socket.on('onVideoLoad', (data) => {
   startSync();
-  loadAndPlayVideo(data.url);
+  loadAndPlayVideo(data.url, 0, true, data.referer, data.type);
   setTimeout(() => endSync(), 1500);
 });
 
 socket.on('onSyncState', (data) => {
   if (data.videoUrl) {
     startSync();
-    loadAndPlayVideo(data.videoUrl, data.currentTime, data.isPlaying);
+    loadAndPlayVideo(data.videoUrl, data.currentTime, data.isPlaying, data.referer, data.videoType);
     setTimeout(() => endSync(), 1500);
   }
 });
