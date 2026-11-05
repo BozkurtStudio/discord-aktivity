@@ -212,6 +212,38 @@ function decodeBody(buffer, contentType, explicitEncoding) {
 }
 
 // ------------------------------------------------------------
+// Dış ağ geçidi (relay)
+// ------------------------------------------------------------
+// Bazı barındırma sağlayıcılarının (ör. Render) çıkış IP'leri kaynak sitelerce
+// WAF ile engellenebiliyor (403). OUTBOUND_RELAY, engellenmeyen bir ağdan çıkan
+// bir vekil adrese (tipik olarak bir Cloudflare Worker) ayarlanırsa tüm HTML/JSON
+// istekleri oradan geçirilir. Boş bırakılırsa doğrudan bağlantı kullanılır.
+const OUTBOUND_RELAY = (process.env.OUTBOUND_RELAY || '').replace(/\/+$/, '');
+
+export function isRelayEnabled() {
+    return OUTBOUND_RELAY.length > 0;
+}
+
+export function relayInfo() {
+    return { enabled: isRelayEnabled(), url: OUTBOUND_RELAY || null };
+}
+
+export async function relayFetch(target, { method, headers, body, signal }) {
+    const relayUrl = `${OUTBOUND_RELAY}/?url=${encodeURIComponent(target)}`;
+    const relayHeaders = { 'x-relay-method': method, ...headers };
+
+    return fetch(relayUrl, {
+        method: 'POST',
+        headers: relayHeaders,
+        body: method === 'GET' || method === 'HEAD' ? undefined : body,
+        // Yönlendirmeyi biz (request) takip ediyoruz; Worker'ın döndürdüğü
+        // 3xx yanıtını olduğu gibi görmeliyiz.
+        redirect: 'manual',
+        signal,
+    });
+}
+
+// ------------------------------------------------------------
 // İstek istemcisi
 // ------------------------------------------------------------
 
@@ -279,13 +311,16 @@ export async function request(rawUrl, options = {}) {
 
         let response;
         try {
-            response = await fetch(current, {
+            const fetchInit = {
                 method,
                 headers: requestHeaders,
                 body: method === 'GET' || method === 'HEAD' ? undefined : body,
                 redirect: 'manual',
                 signal: controller.signal,
-            });
+            };
+            response = isRelayEnabled()
+                ? await relayFetch(current, fetchInit)
+                : await fetch(current, fetchInit);
         } catch (err) {
             if (err.name === 'AbortError') {
                 throw new Error('Kaynak sunucu zaman aşımına uğradı.');
@@ -295,10 +330,14 @@ export async function request(rawUrl, options = {}) {
             clearTimeout(timer);
         }
 
-        const setCookies =
-            typeof response.headers.getSetCookie === 'function'
-                ? response.headers.getSetCookie()
-                : [];
+        // Çerezler doğrudan Set-Cookie başlığından ya da relay'in taşıdığı
+        // x-relay-set-cookie başlığından toplanır.
+        const relaySetCookie = response.headers.get('x-relay-set-cookie');
+        const setCookies = relaySetCookie
+            ? relaySetCookie.split('\n').filter(Boolean)
+            : typeof response.headers.getSetCookie === 'function'
+              ? response.headers.getSetCookie()
+              : [];
         storeSetCookies(current, setCookies);
 
         const status = response.status;

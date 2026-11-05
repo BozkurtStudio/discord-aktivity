@@ -3,7 +3,7 @@ import http from 'http';
 import https from 'https';
 import { URL } from 'url';
 import { Server } from 'socket.io';
-import { buildProxyHeaders, assertSafeUrl, USER_AGENT } from './server/net.js';
+import { buildProxyHeaders, assertSafeUrl, USER_AGENT, isRelayEnabled, relayFetch, relayInfo } from './server/net.js';
 import { resolveVideoUrl, ResolveError } from './server/resolve.js';
 import { listSources, getSource, resolveDescriptor } from './server/sources/index.js';
 
@@ -178,13 +178,20 @@ async function diagProbe(target) {
         };
         if (target.body) headers['Content-Type'] = 'application/x-www-form-urlencoded; charset=UTF-8';
 
-        const response = await fetch(target.url, {
-            method: target.method,
-            headers,
-            body: target.method === 'GET' || target.method === 'HEAD' ? undefined : target.body,
-            redirect: 'manual',
-            signal: controller.signal,
-        });
+        const response = isRelayEnabled()
+            ? await relayFetch(target.url, {
+                  method: target.method,
+                  headers,
+                  body: target.method === 'GET' || target.method === 'HEAD' ? undefined : target.body,
+                  signal: controller.signal,
+              })
+            : await fetch(target.url, {
+                  method: target.method,
+                  headers,
+                  body: target.method === 'GET' || target.method === 'HEAD' ? undefined : target.body,
+                  redirect: 'manual',
+                  signal: controller.signal,
+              });
 
         const picked = {};
         for (const key of DIAG_HEADER_KEYS) {
@@ -211,7 +218,9 @@ async function diagEgressIp(url) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 8000);
     try {
-        const response = await fetch(url, { signal: controller.signal });
+        const response = isRelayEnabled()
+            ? await relayFetch(url, { method: 'GET', headers: {}, signal: controller.signal })
+            : await fetch(url, { signal: controller.signal });
         const data = await response.json().catch(() => null);
         return data?.ip || null;
     } catch (err) {
@@ -234,6 +243,7 @@ app.get('/api/diag', async (req, res) => {
 
     res.json({
         when: new Date().toISOString(),
+        relay: relayInfo(),
         egress: { ipv4: egressV4, ipv6: egressV6 },
         results,
     });
