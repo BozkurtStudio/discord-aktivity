@@ -5,15 +5,25 @@ import { URL } from 'url';
 import { Server } from 'socket.io';
 import { buildProxyHeaders, assertSafeUrl } from './server/net.js';
 import { resolveVideoUrl, ResolveError } from './server/resolve.js';
+import { listSources, getSource, resolveDescriptor } from './server/sources/index.js';
 
 const app = express();
+app.use(express.json({ limit: '100kb' }));
 const server = http.createServer(app);
 const io = new Server(server, {
     cors: { origin: "*" }
 });
 
-// Vite build çıktılarını statik olarak sun
-app.use(express.static('dist'));
+// Vite build çıktılarını statik olarak sun.
+// index.html önbelleğe alınmasın; aksi halde eski (silinmiş) JS paketine
+// işaret eden bayat sayfa tarayıcıda takılı kalabiliyor.
+app.use(express.static('dist', {
+    setHeaders: (res, filePath) => {
+        if (filePath.endsWith('index.html')) {
+            res.setHeader('Cache-Control', 'no-store, must-revalidate');
+        }
+    },
+}));
 
 // ============================================================
 // SAYDAM (TRANSPARENT) PROXY KÖPRÜSÜ
@@ -118,6 +128,81 @@ app.get('/api/resolve', async (req, res) => {
 });
 
 
+// ============================================================
+// KÜTÜPHANE / KAYNAK API'LERİ
+// ============================================================
+function sendApiError(res, err, fallback) {
+    const status = err?.statusCode || 422;
+    console.error('[API]', err?.message || err);
+    res.status(status).json({ error: err?.message || fallback });
+}
+
+app.get('/api/sources', (req, res) => {
+    res.json({ sources: listSources() });
+});
+
+app.get('/api/search', async (req, res) => {
+    const sourceId = typeof req.query.source === 'string' ? req.query.source : '';
+    const query = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+
+    if (!sourceId) return res.status(400).json({ error: 'Kaynak belirtilmedi.' });
+    if (query.length < 2) return res.status(400).json({ error: 'En az 2 karakterlik bir arama girin.' });
+
+    try {
+        const source = getSource(sourceId);
+        const result = await source.search(query);
+        res.json({
+            source: source.id,
+            sourceLabel: source.label,
+            query,
+            results: result.results || [],
+            note: result.note || null,
+        });
+    } catch (err) {
+        sendApiError(res, err, 'Arama yapılamadı.');
+    }
+});
+
+app.get('/api/details', async (req, res) => {
+    const sourceId = typeof req.query.source === 'string' ? req.query.source : '';
+    if (!sourceId) return res.status(400).json({ error: 'Kaynak belirtilmedi.' });
+
+    try {
+        const source = getSource(sourceId);
+        const details = await source.details({
+            id: req.query.id,
+            url: req.query.url,
+            slug: req.query.slug,
+            type: req.query.type,
+        });
+        res.json(details);
+    } catch (err) {
+        sendApiError(res, err, 'İçerik bilgileri alınamadı.');
+    }
+});
+
+app.post('/api/play', async (req, res) => {
+    const body = req.body || {};
+    let descriptor = body.descriptor;
+
+    if (!descriptor || typeof descriptor !== 'object') {
+        const { source, ...rest } = body;
+        descriptor = {
+            kind: source || rest.kind,
+            ...rest,
+        };
+    }
+
+    try {
+        const result = await resolveDescriptor(descriptor);
+        console.log(`[Play] ${descriptor.kind} -> ${result.url} (${result.source})`);
+        res.json(result);
+    } catch (err) {
+        sendApiError(res, err, 'Video oynatma adresi alınamadı.');
+    }
+});
+
+
 // --- ODA DURUMU YÖNETİMİ ---
 const roomState = new Map();
 
@@ -127,10 +212,46 @@ function createRoomState(hostSocketId) {
         videoUrl: null,
         videoType: null,
         referer: null,
+        title: null,
+        descriptor: null,
+        resolvedAt: 0,
+        resolving: null,
         isPlaying: false,
         currentTime: 0,
         lastUpdateTimestamp: Date.now()
     };
+}
+
+// İmzalı oynatma adresleri süreli oluyor. Geç katılan izleyiciye
+// bayatlamış bir URL göndermek yerine seçimi yeniden çözümle.
+const RESOLVE_MAX_AGE_MS = 3.5 * 60_000;
+
+async function refreshRoomVideo(state) {
+    if (!state?.descriptor) return false;
+    if (state.videoUrl && Date.now() - state.resolvedAt < RESOLVE_MAX_AGE_MS) return false;
+
+    if (!state.resolving) {
+        state.resolving = (async () => {
+            try {
+                const result = await resolveDescriptor(state.descriptor);
+                state.videoUrl = result.url;
+                state.videoType = result.type || null;
+                state.referer = result.referer || null;
+                state.title = result.title || state.title;
+                state.resolvedAt = Date.now();
+            } catch (err) {
+                console.error('[Room] Oynatma adresi yenilenemedi:', err.message);
+            }
+        })();
+    }
+
+    try {
+        await state.resolving;
+    } finally {
+        state.resolving = null;
+    }
+
+    return true;
 }
 
 function broadcastHostStatus(channelId) {
@@ -153,7 +274,9 @@ function getEstimatedCurrentTime(state) {
 io.on('connection', (socket) => {
     const userChannels = new Set();
 
-    socket.on('joinRoom', (channelId) => {
+    socket.on('joinRoom', async (channelId) => {
+        if (typeof channelId !== 'string' || !channelId) return;
+
         socket.join(channelId);
         userChannels.add(channelId);
         let state = roomState.get(channelId);
@@ -162,29 +285,48 @@ io.on('connection', (socket) => {
             state = createRoomState(socket.id);
             roomState.set(channelId, state);
         } else {
+            await refreshRoomVideo(state);
+
+            // Yenileme sırasında oda silinmiş olabilir.
+            if (roomState.get(channelId) !== state) return;
+
             const estimatedTime = getEstimatedCurrentTime(state);
             socket.emit('onSyncState', {
                 videoUrl: state.videoUrl,
                 videoType: state.videoType,
                 referer: state.referer,
                 currentTime: estimatedTime,
-                isPlaying: state.isPlaying
+                isPlaying: state.isPlaying,
+                title: state.title,
+                descriptor: state.descriptor
             });
         }
         broadcastHostStatus(channelId);
     });
 
-    socket.on('videoLoad', ({ channelId, url, referer, type }) => {
+    socket.on('videoLoad', ({ channelId, url, referer, type, descriptor, title }) => {
+        if (typeof channelId !== 'string' || typeof url !== 'string' || !url) return;
+
         const state = roomState.get(channelId);
         if (!state || state.hostSocketId !== socket.id) return;
 
         state.videoUrl = url;
         state.videoType = type || null;
         state.referer = referer || null;
+        state.title = title || descriptor?.title || null;
+        state.descriptor = descriptor && typeof descriptor === 'object' ? descriptor : null;
+        state.resolvedAt = Date.now();
         state.currentTime = 0;
         state.isPlaying = true;
         state.lastUpdateTimestamp = Date.now();
-        io.to(channelId).emit('onVideoLoad', { url, referer: state.referer, type: state.videoType });
+
+        io.to(channelId).emit('onVideoLoad', {
+            url,
+            referer: state.referer,
+            type: state.videoType,
+            title: state.title,
+            descriptor: state.descriptor
+        });
     });
 
     socket.on('videoState', ({ channelId, action, currentTime }) => {

@@ -103,8 +103,114 @@ function discardBody(response) {
     }
 }
 
+// ------------------------------------------------------------
+// Host bazlı nazik istek sıralaması
+// Aynı siteye art arda yüklenmek 429 / Cloudflare challenge tetikliyor.
+// ------------------------------------------------------------
+
+const hostNextAllowed = new Map();
+const DEFAULT_HOST_INTERVAL_MS = 120;
+
+function hostIntervalFor(hostname) {
+    const host = hostname.replace(/^www\./i, '').toLowerCase();
+    if (host === 'sezonlukdizi.cc') return 550;
+    if (host === 'jetfilmizle.app') return 250;
+    if (host === 'bysejikuar.com') return 250;
+    if (host === 'videopark.top') return 150;
+    if (host === 'godrive.erikkalinina1994.workers.dev') return 150;
+    return DEFAULT_HOST_INTERVAL_MS;
+}
+
+async function throttleHost(hostname, overrideMs = null) {
+    const interval = overrideMs ?? hostIntervalFor(hostname);
+    if (interval <= 0) return;
+
+    const now = Date.now();
+    const next = hostNextAllowed.get(hostname) || 0;
+    const wait = Math.max(0, next - now);
+    hostNextAllowed.set(hostname, Math.max(now, next) + interval);
+    if (wait > 0) {
+        await new Promise(resolve => setTimeout(resolve, wait));
+    }
+}
+
+// ------------------------------------------------------------
+// Basit TTL önbelleği
+// ------------------------------------------------------------
+
+const responseCache = new Map();
+
+function cacheGet(key) {
+    const hit = responseCache.get(key);
+    if (!hit) return null;
+    if (hit.expires <= Date.now()) {
+        responseCache.delete(key);
+        return null;
+    }
+    return hit.value;
+}
+
+function cacheSet(key, value, ttlMs) {
+    if (!ttlMs || ttlMs <= 0) return;
+    if (responseCache.size > 300) {
+        // En eski kayıtları at
+        let i = 0;
+        for (const k of responseCache.keys()) {
+            if (i++ >= 60) break;
+            responseCache.delete(k);
+        }
+    }
+    responseCache.set(key, { value, expires: Date.now() + ttlMs });
+}
+
+export function clearResponseCache() {
+    responseCache.clear();
+}
+
+// ------------------------------------------------------------
+// Karakter kodlaması
+// ------------------------------------------------------------
+
+const CHARSET_ALIASES = new Map([
+    ['iso-8859-9', 'windows-1254'],
+    ['latin5', 'windows-1254'],
+    ['cp1254', 'windows-1254'],
+    ['utf8', 'utf-8'],
+]);
+
+function normalizeCharset(charset) {
+    if (!charset) return null;
+    const value = String(charset).trim().toLowerCase().replace(/^["']|["']$/g, '');
+    return CHARSET_ALIASES.get(value) || value;
+}
+
+function charsetFromContentType(contentType) {
+    const match = /charset\s*=\s*["']?([\w-]+)/i.exec(contentType || '');
+    return normalizeCharset(match?.[1]);
+}
+
+function decodeBody(buffer, contentType, explicitEncoding) {
+    const charset = normalizeCharset(explicitEncoding) || charsetFromContentType(contentType) || 'utf-8';
+    try {
+        return new TextDecoder(charset).decode(buffer);
+    } catch {
+        try {
+            return new TextDecoder('windows-1254').decode(buffer);
+        } catch {
+            return buffer.toString('utf8');
+        }
+    }
+}
+
+// ------------------------------------------------------------
+// İstek istemcisi
+// ------------------------------------------------------------
+
 /**
- * Yönlendirmeleri takip eden, çerez toplayan basit GET istemcisi.
+ * Yönlendirmeleri takip eden, çerez toplayan basit istemci.
+ * GET ve POST (form) destekler, charset'i Content-Type'tan çözer,
+ * aynı hosta yapılan istekleri kısa aralıklarla sıraya sokar.
+ *
  * Video/octet-stream yanıtlarında gövde okunmaz (diski/ram'i şişirmemek için).
  */
 export async function request(rawUrl, options = {}) {
@@ -113,12 +219,40 @@ export async function request(rawUrl, options = {}) {
         headers = {},
         maxRedirects = 6,
         timeoutMs = 20000,
+        method: initialMethod = 'GET',
+        body: initialBody = null,
+        encoding = null,
+        cacheTtlMs = 0,
+        maxBytes = 4_000_000,
+        hostIntervalMs = null,
     } = options;
+
+    let method = String(initialMethod || 'GET').toUpperCase();
+    let body = initialBody;
+
+    if (body instanceof URLSearchParams) body = body.toString();
+    if (typeof body === 'string') {
+        // Form gövdesi için varsayılan içerik tipi
+        if (!Object.keys(headers).some(h => h.toLowerCase() === 'content-type')) {
+            headers['Content-Type'] = 'application/x-www-form-urlencoded; charset=UTF-8';
+        }
+    }
 
     let current = assertSafeUrl(rawUrl).href;
 
+    const cacheable = method === 'GET' && cacheTtlMs > 0;
+    const cacheKey = cacheable
+        ? `${method} ${current} ${headers.Accept || ''} ${headers.Referer || referer || ''} ${encoding || ''}`
+        : null;
+
+    if (cacheKey) {
+        const cached = cacheGet(cacheKey);
+        if (cached) return cached;
+    }
+
     for (let hop = 0; hop <= maxRedirects; hop++) {
-        assertSafeUrl(current);
+        const parsedCurrent = assertSafeUrl(current);
+        await throttleHost(parsedCurrent.hostname, hostIntervalMs);
 
         const requestHeaders = {
             'User-Agent': USER_AGENT,
@@ -137,8 +271,9 @@ export async function request(rawUrl, options = {}) {
         let response;
         try {
             response = await fetch(current, {
-                method: 'GET',
+                method,
                 headers: requestHeaders,
+                body: method === 'GET' || method === 'HEAD' ? undefined : body,
                 redirect: 'manual',
                 signal: controller.signal,
             });
@@ -162,6 +297,17 @@ export async function request(rawUrl, options = {}) {
 
         if (status >= 300 && status < 400 && location) {
             discardBody(response);
+
+            // 303 (ve tarayıcı davranışı olarak 301/302) POST'u GET'e çevirir.
+            if (
+                method !== 'GET' &&
+                method !== 'HEAD' &&
+                (status === 301 || status === 302 || status === 303)
+            ) {
+                method = 'GET';
+                body = null;
+            }
+
             current = new URL(location, current).href;
             continue;
         }
@@ -176,19 +322,33 @@ export async function request(rawUrl, options = {}) {
             /^(?:video|audio|image)\//.test(contentType) ||
             contentType.includes('octet-stream');
 
-        let body = '';
+        let text = '';
         if (!isBinary) {
-            body = await response.text();
-            if (body.length > 4_000_000) body = body.slice(0, 4_000_000);
+            const buffer = Buffer.from(await response.arrayBuffer());
+            const slice = buffer.length > maxBytes ? buffer.subarray(0, maxBytes) : buffer;
+            text = decodeBody(slice, contentType, encoding);
         } else {
             discardBody(response);
         }
 
-        return { finalUrl: current, status, contentType, headers: response.headers, body };
+        const result = {
+            finalUrl: current,
+            status,
+            contentType,
+            headers: response.headers,
+            body: text,
+        };
+
+        if (cacheKey) cacheSet(cacheKey, result, cacheTtlMs);
+        return result;
     }
 
     throw new Error('Çok fazla yönlendirme var.');
 }
+
+// ------------------------------------------------------------
+// Proxy başlıkları
+// ------------------------------------------------------------
 
 /**
  * Proxy'nin hedefe göndereceği başlıklar. Referer/Origin olmadan

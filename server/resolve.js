@@ -1,5 +1,7 @@
 import crypto from 'crypto';
 import { request, assertSafeUrl } from './net.js';
+import { resolveByse } from './sources/byse.js';
+import { resolveVideopark } from './sources/videopark.js';
 
 /**
  * Embed sayfalarından doğrudan oynatılabilir (mp4 / m3u8) adres çıkarır.
@@ -7,7 +9,8 @@ import { request, assertSafeUrl } from './net.js';
  * Desteklenenler:
  *  - Doğrudan MP4 / M3U8 / WebM bağlantıları
  *  - Pixeldrain (/u/, /d/, /api/file/)
- *  - Filemoon (packed JS çözümü ile)
+ *  - Filemoon / Byse (AES-256-GCM şifreli playback API'si)
+ *  - Videopark (JetFilmizle oynatıcısı: worker MP4 / inline HLS)
  *  - Vidmoly
  *  - Streamtape (parçalı get_video linki)
  *  - Doodstream (pass_md5 akışı)
@@ -547,6 +550,28 @@ async function resolveVoe(embedUrl) {
 // ------------------------------------------------------------
 
 const HANDLERS = [
+    {
+        name: 'Filemoon',
+        test: host => /(^|\.)bysejikuar\.com$/i.test(host),
+        resolve: async url => {
+            try {
+                return await resolveByse(url);
+            } catch (err) {
+                throw new ResolveError(err.message || 'Filemoon kaynağı çözümlenemedi.');
+            }
+        },
+    },
+    {
+        name: 'Videopark',
+        test: host => host === 'videopark.top' || host.endsWith('.videopark.top'),
+        resolve: async url => {
+            try {
+                return await resolveVideopark(url);
+            } catch (err) {
+                throw new ResolveError(err.message || 'Videopark kaynağı çözümlenemedi.');
+            }
+        },
+    },
     {
         name: 'Pixeldrain',
         test: host => host === 'pixeldrain.com' || host.endsWith('.pixeldrain.com'),

@@ -10,7 +10,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "start": "node server.js"
+    "start": "node server.js",
+    "smoke": "node scripts/smoke-sources.mjs"
   },
   "devDependencies": {
     "vite": "^8.0.12"

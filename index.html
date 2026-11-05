@@ -14,13 +14,15 @@
     <!-- Durum etiketi -->
     <div id="status-label" class="status-label host">🎬 Bağlanılıyor...</div>
 
-    <!-- Host paneli -->
-    <div id="host-panel">
+    <!-- Host paneli (host durumu gelene kadar gizli) -->
+    <div id="host-panel" class="hidden">
       <input type="text" id="video-url"
         placeholder="MP4 / M3U8 linki veya embed adresi yapıştır...">
       <button id="play-btn">Videoyu Herkese Oynat</button>
+      <button id="library-btn" type="button">📚 Kütüphane</button>
+      <div id="now-playing" class="now-playing hidden"></div>
       <div class="source-hint">
-        Embed destekleyen kaynaklar: Pixeldrain, Filemoon, Vidmoly, Streamtape, Doodstream, Voe, MixDrop
+        Kütüphaneden dizi/film arayabilir veya doğrudan MP4 / M3U8 / embed linki yapıştırabilirsin.
       </div>
     </div>
 
@@ -43,7 +45,95 @@
     <!-- Video oynatıcı -->
     <video id="video-player" muted></video>
 
+    <!-- ============================================================ -->
+    <!-- KÜTÜPHANE -->
+    <!-- ============================================================ -->
+    <div id="library-overlay" class="library-overlay hidden" role="dialog" aria-modal="true"
+      aria-labelledby="library-title">
+      <div class="library-modal">
+
+        <header class="library-header">
+          <div>
+            <h2 id="library-title">🎬 Film &amp; Dizi Kütüphanesi</h2>
+            <p>Sezonluk Dizi veya JetFilmizle'den arayın, bölümü seçin ve herkesle senkron izleyin.</p>
+          </div>
+          <button id="library-close" class="icon-btn" type="button" aria-label="Kapat">✕</button>
+        </header>
+
+        <div class="library-toolbar">
+          <div id="source-tabs" class="source-tabs" role="tablist"></div>
+          <form id="search-form" class="search-form">
+            <input id="search-input" type="search" placeholder="Dizi veya film adı yaz..." autocomplete="off"
+              spellcheck="false">
+            <button id="search-btn" type="submit">Ara</button>
+          </form>
+        </div>
+
+        <div class="library-body">
+          <section id="results-panel" class="results-panel">
+            <div id="search-status" class="panel-message">Bir kaynak seçip arama yapın.</div>
+            <div id="results-grid" class="results-grid"></div>
+          </section>
+
+          <section id="details-panel" class="details-panel hidden">
+            <button id="details-back" class="back-btn" type="button">← Sonuçlara dön</button>
+
+            <div class="details-head">
+              <img id="details-poster" class="details-poster" alt="" loading="lazy">
+              <div class="details-info">
+                <h3 id="details-title"></h3>
+                <div id="details-meta" class="details-meta"></div>
+                <p id="details-description" class="details-description"></p>
+              </div>
+            </div>
+
+            <div class="details-controls">
+              <div class="control-group">
+                <span class="control-label">Dil / Oynatıcı</span>
+                <div id="player-types" class="chip-row"></div>
+              </div>
+
+              <div class="control-group">
+                <span class="control-label">Sezon</span>
+                <div id="season-tabs" class="chip-row hidden"></div>
+              </div>
+
+              <div class="control-group">
+                <span class="control-label">Bölüm</span>
+                <div id="episode-grid" class="episode-grid hidden"></div>
+              </div>
+
+              <div class="control-group">
+                <span class="control-label">Kaynak</span>
+                <div id="source-grid" class="chip-row hidden"></div>
+              </div>
+
+              <div id="details-message" class="details-message hidden"></div>
+
+              <div class="details-play-row">
+                <button id="details-play-btn" class="primary-btn" type="button" disabled>Seçimi Oynat</button>
+                <span id="selection-label" class="selection-label">Bir bölüm seçin</span>
+              </div>
+            </div>
+          </section>
+        </div>
+
+      </div>
+    </div>
+
   </div>
+  <script>
+    // Uygulama betiği hiç çalışmazsa (önbellekteki eski index.html, 404 vb.)
+    // kullanıcıya görünür bir uyarı göster.
+    window.__appBooted = false;
+    setTimeout(function () {
+      if (window.__appBooted) return;
+      var label = document.getElementById('status-label');
+      if (!label) return;
+      label.textContent = '⚠ Uygulama yüklenemedi. Sayfayı Ctrl+F5 ile yenileyin.';
+      label.className = 'status-label error';
+    }, 5000);
+  </script>
   <script type="module" src="src/main.js"></script>
 </body>
 

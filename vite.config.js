@@ -1,19 +1,23 @@
 import { defineConfig } from 'vite';
 
+// Geliştirme sırasında backend farklı bir portta çalışıyorsa:
+//   API_PORT=3100 npm run dev
+const apiTarget = `http://localhost:${process.env.API_PORT || 3000}`;
+
 export default defineConfig({
     server: {
         allowedHosts: true,
         proxy: {
             '/api': {
-                target: 'http://localhost:3000',
+                target: apiTarget,
                 changeOrigin: true
             },
             '/proxy': {
-                target: 'http://localhost:3000',
+                target: apiTarget,
                 changeOrigin: true
             },
             '/socket.io': {
-                target: 'http://localhost:3000',
+                target: apiTarget,
                 ws: true
             }
         }
