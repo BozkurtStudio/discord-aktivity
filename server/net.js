@@ -362,7 +362,14 @@ export async function request(rawUrl, options = {}) {
 
         if (status >= 400) {
             discardBody(response);
-            throw new Error(`Kaynak ${status} HTTP hatası döndürdü.`);
+            // Engellenme nedenini teşhis edebilmek için hangi adresin ve hangi
+            // Cloudflare bölgesinin (cf-ray) döndürdüğünü de yaz.
+            const trace = [response.headers.get('cf-ray'), response.headers.get('x-relay-via')]
+                .filter(Boolean)
+                .join(' ');
+            const detail = `${method} ${current}${trace ? ` (${trace})` : ''}`;
+            console.error(`[Net] ${status} <- ${detail}`);
+            throw new Error(`Kaynak ${status} HTTP hatası döndürdü: ${detail}`);
         }
 
         const contentType = (response.headers.get('content-type') || '').toLowerCase();
