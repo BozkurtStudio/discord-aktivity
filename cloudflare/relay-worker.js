@@ -10,22 +10,15 @@
  * NEDEN DURABLE OBJECT: sezonlukdizi gibi bazı siteler ABD çıkışını da
  * engelliyor. Worker normalde çağıranın bulunduğu bölgede çalışır (Render
  * ABD'de olduğu için PDX). `locationHint: 'weur'` ile sabitlenen bir Durable
- * Object ise HER ZAMAN Batı Avrupa'da çalışır; istek oradan çıkar ve engel
- * aşılır.
+ * Object ise HER ZAMAN Batı Avrupa'da çalışır; istek oradan çıkar.
+ *
+ * TEŞHİS:  {worker}/?diag=1
+ *   Yürütmenin yapıldığı yeri (via) ve gerçek çıkış bölgesini (colo) döner.
  *
  * KURULUM (dashboard'a girmeden):
  *   npx wrangler login
  *   npx wrangler deploy -c cloudflare/wrangler.toml
  * Sonra Render → Environment → OUTBOUND_RELAY = <deploy adresi>
- *
- * PROTOKOL:
- *   POST  {worker}/?url=<hedef-url>
- *   Başlıklar: x-relay-method (asıl HTTP metodu), x-relay-referer (opsiyonel),
- *              ve hedefe iletilecek diğer başlıklar (User-Agent, Cookie ...).
- *   Gövde: asıl isteğin gövdesi (POST form vb.).
- *   Yanıt: hedefin durum kodu + başlıkları + gövdesi. Çerezler, tarayıcı
- *          Set-Cookie'yi okuyamadığı için x-relay-set-cookie başlığına
- *          satır satır yazılır.
  */
 
 const CORS_HEADERS = {
@@ -61,10 +54,12 @@ const SKIP_RESPONSE_HEADERS = new Set([
     'cf-ray',
 ]);
 
-// Asıl işi yapan bölge-sabitli Durable Object (Batı Avrupa).
+// İsteği sabit olarak Batı Avrupa'dan çıkaran Durable Object.
 export class RelayRegion {
     async fetch(request) {
-        return relay(request);
+        const url = new URL(request.url);
+        if (url.searchParams.get('diag') === '1') return diag(request, 'do');
+        return relay(request, 'do');
     }
 }
 
@@ -74,26 +69,31 @@ export default {
             return new Response(null, { status: 204, headers: CORS_HEADERS });
         }
 
-        const target = new URL(request.url).searchParams.get('url');
-        if (!target) return json({ error: 'url parametresi gerekli' }, 400);
-
-        // Durable Object varsa oradan geçir; yoksa doğrudan işle.
-        if (env && env.RELAY_REGION) {
-            try {
-                const id = env.RELAY_REGION.idFromName('europe');
-                const stub = env.RELAY_REGION.get(id, { locationHint: 'weur' });
-                return await stub.fetch(request);
-            } catch (err) {
-                // DO erişilemezse doğrudan (çağıranın bölgesinden) dene.
-                return relay(request, err);
-            }
+        const url = new URL(request.url);
+        const isDiag = url.searchParams.get('diag') === '1';
+        if (!isDiag && !url.searchParams.get('url')) {
+            return json({ error: 'url parametresi gerekli' }, 400);
         }
 
-        return relay(request);
+        const stub = env && env.RELAY_REGION ? getStub(env) : null;
+        if (stub) {
+            try {
+                return await stub.fetch(request);
+            } catch (err) {
+                const note = `do-error: ${err?.message || err}`;
+                return isDiag ? diag(request, note) : relay(request, note);
+            }
+        }
+        return isDiag ? diag(request, 'no-do') : relay(request, 'no-do');
     },
 };
 
-async function relay(request, doError) {
+function getStub(env) {
+    const id = env.RELAY_REGION.idFromName('europe');
+    return env.RELAY_REGION.get(id, { locationHint: 'weur' });
+}
+
+async function relay(request, via) {
     const target = new URL(request.url).searchParams.get('url');
     if (!target) return json({ error: 'url parametresi gerekli' }, 400);
 
@@ -117,7 +117,6 @@ async function relay(request, doError) {
     }
     const referer = request.headers.get('x-relay-referer');
     if (referer) headers.set('referer', referer);
-    // Sıkıştırmayı istemiyoruz; gövdeyi olduğu gibi aktarıyoruz.
     headers.set('accept-encoding', 'identity');
 
     let response;
@@ -129,8 +128,7 @@ async function relay(request, doError) {
             redirect: 'manual',
         });
     } catch (err) {
-        const detail = `${err?.message || err}${doError ? ` (DO: ${doError.message || doError})` : ''}`;
-        return json({ error: `kaynağa ulaşılamadı: ${detail}` }, 502);
+        return json({ error: `kaynağa ulaşılamadı: ${err?.message || err}` }, 502);
     }
 
     const outHeaders = new Headers(CORS_HEADERS);
@@ -138,12 +136,36 @@ async function relay(request, doError) {
         if (SKIP_RESPONSE_HEADERS.has(key.toLowerCase())) continue;
         outHeaders.set(key, value);
     }
+    outHeaders.set('x-relay-via', via);
 
     const setCookies =
         typeof response.headers.getSetCookie === 'function' ? response.headers.getSetCookie() : [];
     if (setCookies.length) outHeaders.set('x-relay-set-cookie', setCookies.join('\n'));
 
     return new Response(response.body, { status: response.status, headers: outHeaders });
+}
+
+async function diag(request, via) {
+    let colo = null;
+    let ip = null;
+    try {
+        const res = await fetch('https://www.cloudflare.com/cdn-cgi/trace');
+        const text = await res.text();
+        colo = /^colo=(.+)$/m.exec(text)?.[1] || null;
+        ip = /^ip=(.+)$/m.exec(text)?.[1] || null;
+    } catch (err) {
+        colo = `hata: ${err?.message || err}`;
+    }
+    return json(
+        {
+            via,
+            egressColo: colo,
+            egressIp: ip,
+            incomingColo: request.cf?.colo || null,
+            incomingCountry: request.cf?.country || null,
+        },
+        200,
+    );
 }
 
 function json(body, status) {

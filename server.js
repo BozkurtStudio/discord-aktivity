@@ -165,6 +165,7 @@ const DIAG_HEADER_KEYS = [
     'location',
     'content-type',
     'x-powered-by',
+    'x-relay-via',
 ];
 
 async function diagProbe(target) {
@@ -230,6 +231,21 @@ async function diagEgressIp(url) {
     }
 }
 
+// Relay Worker'ın kendi teşhisini (hangi yürütme yolu + hangi çıkış bölgesi)
+// Render'dan sorar; böylece engelin nedenini kesin görürüz.
+async function diagRelayProbe() {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10000);
+    try {
+        const response = await fetch(`${relayInfo().url}/?diag=1`, { signal: controller.signal });
+        return await response.json();
+    } catch (err) {
+        return { error: err?.name === 'AbortError' ? 'timeout' : err?.message || String(err) };
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
 app.get('/api/diag', async (req, res) => {
     const [egressV4, egressV6] = await Promise.all([
         diagEgressIp('https://api.ipify.org?format=json'),
@@ -241,9 +257,12 @@ app.get('/api/diag', async (req, res) => {
         results.push({ name: target.name, ...(await diagProbe(target)) });
     }
 
+    const relayProbe = isRelayEnabled() ? await diagRelayProbe() : null;
+
     res.json({
         when: new Date().toISOString(),
         relay: relayInfo(),
+        relayProbe,
         egress: { ipv4: egressV4, ipv6: egressV6 },
         results,
     });
