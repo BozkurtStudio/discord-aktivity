@@ -192,7 +192,18 @@ app.get('/api/resolve', async (req, res) => {
 function sendApiError(res, err, fallback) {
     const status = err?.statusCode || 422;
     console.error('[API]', err?.message || err);
-    res.status(status).json({ error: err?.message || fallback });
+
+    let message = err?.message || fallback;
+
+    // Teşhis için detaylı mesaj logda kalır; kullanıcıya sade bir metin döner.
+    if (/^Kaynak 403/.test(message)) {
+        message = 'Kaynak site bu isteği engelledi (403). Başka bir kaynak deneyin ' +
+            '(ör. JetFilmizle) veya uygulamayı kendi bilgisayarınızda çalıştırın.';
+    } else {
+        message = message.replace(/:\s*(?:GET|POST|HEAD)\s+\S+[\s\S]*$/, '.');
+    }
+
+    res.status(status).json({ error: message });
 }
 
 app.get('/api/sources', (req, res) => {
