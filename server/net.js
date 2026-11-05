@@ -361,13 +361,25 @@ export async function request(rawUrl, options = {}) {
         }
 
         if (status >= 400) {
-            discardBody(response);
-            // Engellenme nedenini teşhis edebilmek için hangi adresin ve hangi
-            // Cloudflare bölgesinin (cf-ray) döndürdüğünü de yaz.
-            const trace = [response.headers.get('cf-ray'), response.headers.get('x-relay-via')]
+            // Engellenme nedenini teşhis edebilmek için hedef adresi, Cloudflare
+            // bölgesini (cf-ray), engelleme türünü (cf-mitigated) ve yanıt
+            // gövdesinin ilk kısmını da yaz.
+            let snippet = '';
+            try {
+                snippet = (await response.text()).replace(/\s+/g, ' ').slice(0, 200);
+            } catch {
+                discardBody(response);
+            }
+            const trace = ['cf-ray', 'cf-mitigated', 'cf-cache-status', 'x-relay-via']
+                .map(header => {
+                    const value = response.headers.get(header);
+                    return value ? `${header}=${value}` : null;
+                })
                 .filter(Boolean)
                 .join(' ');
-            const detail = `${method} ${current}${trace ? ` (${trace})` : ''}`;
+            const detail =
+                `${method} ${current}${trace ? ` (${trace})` : ''}` +
+                (snippet ? ` :: ${snippet}` : '');
             console.error(`[Net] ${status} <- ${detail}`);
             throw new Error(`Kaynak ${status} HTTP hatası döndürdü: ${detail}`);
         }
