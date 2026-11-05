@@ -3,7 +3,7 @@ import http from 'http';
 import https from 'https';
 import { URL } from 'url';
 import { Server } from 'socket.io';
-import { buildProxyHeaders, assertSafeUrl } from './server/net.js';
+import { buildProxyHeaders, assertSafeUrl, request } from './server/net.js';
 import { resolveVideoUrl, ResolveError } from './server/resolve.js';
 import { listSources, getSource, resolveDescriptor } from './server/sources/index.js';
 
@@ -139,6 +139,40 @@ function sendApiError(res, err, fallback) {
 
 app.get('/api/sources', (req, res) => {
     res.json({ sources: listSources() });
+});
+
+// Sunucunun hangi kaynak sitelere erişebildiğini gösterir (barındırma IP'si
+// engellenmiş mi vb. teşhis için). Gizli bilgi döndürmez.
+app.get('/api/diag', async (req, res) => {
+    const checks = [
+        { name: 'sezonlukdizi-home', url: 'https://sezonlukdizi.cc/', method: 'GET' },
+        {
+            name: 'sezonlukdizi-search',
+            url: 'https://sezonlukdizi.cc/ajax/arama.asp',
+            method: 'POST',
+            body: 'q=test',
+        },
+        { name: 'jetfilmizle-search', url: 'https://jetfilmizle.app/arama-json?q=test', method: 'GET' },
+        { name: 'jetfilmizle-home', url: 'https://jetfilmizle.app/', method: 'GET' },
+        { name: 'videopark-home', url: 'https://videopark.top/', method: 'GET' },
+    ];
+
+    const results = [];
+    for (const check of checks) {
+        try {
+            const response = await request(check.url, {
+                method: check.method,
+                body: check.body,
+                referer: new URL(check.url).origin + '/',
+                timeoutMs: 15000,
+            });
+            results.push({ name: check.name, ok: true, status: response.status, bytes: response.body.length });
+        } catch (err) {
+            results.push({ name: check.name, ok: false, error: err?.message || String(err) });
+        }
+    }
+
+    res.json({ when: new Date().toISOString(), results });
 });
 
 app.get('/api/search', async (req, res) => {
