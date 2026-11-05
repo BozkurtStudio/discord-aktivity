@@ -10,3 +10,13 @@ name = "dc-relay"
 main = "relay-worker.js"
 compatibility_date = "2025-08-01"
 workers_dev = true
+
+# İsteği sabit olarak Batı Avrupa'dan çıkaran Durable Object.
+# (sezonlukdizi ABD çıkışını engellediği için gerekli.)
+[[durable_objects.bindings]]
+name = "RELAY_REGION"
+class_name = "RelayRegion"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RelayRegion"]
