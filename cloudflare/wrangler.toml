@@ -1,0 +1,12 @@
+# Cloudflare Worker (relay) yapılandırması
+#
+# Dashboard'a girmeden kurmak için:
+#   npx wrangler login                          (bir kez, tarayıcıdan onay)
+#   npx wrangler deploy -c cloudflare/wrangler.toml
+#
+# Deploy sonrası verilen adresi Render'da OUTBOUND_RELAY olarak ayarla.
+
+name = "dc-relay"
+main = "relay-worker.js"
+compatibility_date = "2025-08-01"
+workers_dev = true

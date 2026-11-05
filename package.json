@@ -12,6 +12,7 @@
     "preview": "vite preview",
     "start": "node server.js",
     "host": "node scripts/host.mjs",
+    "deploy:worker": "npx -y wrangler@4 deploy -c cloudflare/wrangler.toml",
     "smoke": "node scripts/smoke-sources.mjs"
   },
   "devDependencies": {
