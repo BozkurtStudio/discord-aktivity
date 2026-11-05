@@ -247,6 +247,51 @@ async function resolveVip(pageUrl) {
     return buildStreamResult(data, pageUrl, null);
 }
 
+// JetFilmizle'nin bazı dizileri JWPlayer tabanlı /titan/ oynatıcısını kullanır.
+// Akış (stream_url) ve altyazılar sayfadaki _sd değişkenine gömülüdür.
+async function resolveTitan(pageUrl) {
+    const page = await request(pageUrl, {
+        referer: 'https://jetfilmizle.app/',
+        timeoutMs: 20000,
+    });
+
+    const marker = page.body.search(/var\s+_sd\s*=\s*\{/);
+    if (marker === -1) throw new Error('Videopark titan oynatıcı verisi bulunamadı.');
+
+    const raw = extractBalancedObject(page.body, page.body.indexOf('{', marker));
+    let data = null;
+    try {
+        data = raw ? JSON.parse(raw) : null;
+    } catch {
+        data = null;
+    }
+    if (!data?.stream_url) throw new Error('Videopark titan akış adresi bulunamadı.');
+
+    const tracks = Array.isArray(data.subtitles)
+        ? data.subtitles
+            .map(track => {
+                if (!track?.file) return null;
+                return {
+                    url: track.file,
+                    label: track.label || 'Altyazı',
+                    lang: track.lang || null,
+                };
+            })
+            .filter(Boolean)
+        : [];
+
+    return {
+        url: data.stream_url,
+        type: 'hls',
+        referer: pageUrl,
+        source: 'Videopark',
+        title: data.title || null,
+        poster: data.poster || null,
+        tracks,
+        qualities: [],
+    };
+}
+
 async function resolveApollo(pageUrl) {
     const parsed = new URL(pageUrl);
     const videoId = parsed.searchParams.get('id');
@@ -298,6 +343,8 @@ export async function resolveVideopark(url) {
     let result;
     if (/^\/you\/v\//i.test(parsed.pathname)) {
         result = await resolveSeries(parsed.href);
+    } else if (/^\/titan\//i.test(parsed.pathname)) {
+        result = await resolveTitan(parsed.href);
     } else if (/^\/vip\//i.test(parsed.pathname)) {
         result = await resolveVip(parsed.href);
     } else if (/^\/apollo\//i.test(parsed.pathname)) {

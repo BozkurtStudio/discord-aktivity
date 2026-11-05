@@ -304,58 +304,6 @@ async function diagRelayProbe() {
     }
 }
 
-// GEÇİCİ teşhis ucu: Render/FRA'dan sezonlukdizi AJAX ucuna farklı başlık
-// varyasyonları gönderip hangisinin geçtiğini bulmak için. Kalıcı değildir.
-app.get('/api/ssprobe', async (req, res) => {
-    if (req.query.token !== 'ss-debug-7731') return res.status(404).send('Not found');
-
-    const target = 'https://sezonlukdizi.cc/ajax/dataAlternatif22.asp';
-    const body = 'bid=90276&dil=1';
-    const base = {
-        'User-Agent': USER_AGENT,
-        'Accept-Language': 'tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7',
-        'X-Requested-With': 'XMLHttpRequest',
-        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-        'Referer': 'https://sezonlukdizi.cc/',
-    };
-    const jsonAccept = { ...base, Accept: 'application/json, text/javascript, */*; q=0.01' };
-
-    const variants = [
-        { name: 'baseline-html-accept', url: target, method: 'POST', body, headers: { ...base, Accept: 'text/html,application/xhtml+xml,*/*;q=0.8' } },
-        { name: 'accept-star', url: target, method: 'POST', body, headers: { ...base, Accept: '*/*' } },
-        { name: 'accept-json-secfetch', url: target, method: 'POST', body, headers: { ...jsonAccept, 'Sec-Fetch-Site': 'same-origin', 'Sec-Fetch-Mode': 'cors', 'Sec-Fetch-Dest': 'empty' } },
-        { name: 'no-xrw-accept-star', url: target, method: 'POST', body, headers: { 'User-Agent': USER_AGENT, 'Accept': '*/*', 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8', 'Referer': 'https://sezonlukdizi.cc/' } },
-        { name: 'origin-json', url: target, method: 'POST', body, headers: { ...jsonAccept, Origin: 'https://sezonlukdizi.cc' } },
-        { name: 'cachebust-json', url: `${target}?_=${Date.now()}`, method: 'POST', body, headers: { ...jsonAccept } },
-        { name: 'get-query', url: `${target}?bid=90276&dil=1`, method: 'GET', headers: base },
-        { name: 'post-json-body', url: target, method: 'POST', body: JSON.stringify({ bid: '90276', dil: '1' }), headers: { ...jsonAccept, 'Content-Type': 'application/json' } },
-    ];
-
-    const results = [];
-    for (const variant of variants) {
-        try {
-            const init = {
-                method: variant.method,
-                headers: variant.headers,
-                body: variant.method === 'GET' ? undefined : variant.body,
-            };
-            const response = isRelayEnabled()
-                ? await relayFetch(variant.url, init)
-                : await fetch(variant.url, { ...init, redirect: 'manual' });
-            const snippet = (await response.text()).replace(/\s+/g, ' ').slice(0, 90);
-            results.push({
-                name: variant.name,
-                status: response.status,
-                ray: response.headers.get('cf-ray'),
-                snippet,
-            });
-        } catch (err) {
-            results.push({ name: variant.name, error: err.message });
-        }
-    }
-    res.json(results);
-});
-
 app.get('/api/diag', async (req, res) => {
     const [egressV4, egressV6] = await Promise.all([
         diagEgressIp('https://api.ipify.org?format=json'),
