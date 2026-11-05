@@ -18,8 +18,11 @@ window.addEventListener('unhandledrejection', event => {
   showBootError(reason?.message || String(reason || 'Bilinmeyen hata'));
 });
 
-// Developer Portal'dan aldığın Client ID
-const DISCORD_CLIENT_ID = "1518311302097797233";
+// Developer Portal'dan aldığın Client ID. Kendi Discord uygulamanı
+// kullanmak için proje köküne bir .env dosyası koy:
+//   VITE_DISCORD_CLIENT_ID=1234567890
+// (npm run host bunu otomatik kullanır.)
+const DISCORD_CLIENT_ID = import.meta.env.VITE_DISCORD_CLIENT_ID || "1518311302097797233";
 
 // DiscordSDK yalnızca gerçek Discord iframe'i içinde oluşturulabilir; aksi
 // halde yapıcı fonksiyon "frame_id query param is not defined" hatası atıp
