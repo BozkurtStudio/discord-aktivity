@@ -1,4 +1,13 @@
 import { URL } from 'url';
+import dns from 'dns';
+
+// Barındırma ortamlarında (ör. Render) IPv6 çıkışı bazı kaynak sitelerce
+// engellenebiliyor. A kaydı varsa IPv4'ü tercih et; yoksa yine IPv6'ya düşer.
+try {
+    dns.setDefaultResultOrder('ipv4first');
+} catch {
+    /* eski Node sürümlerinde yoksa yok say */
+}
 
 // Embed sayfalarının çoğu tarayıcı benzeri bir User-Agent bekliyor.
 export const USER_AGENT =

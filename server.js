@@ -3,7 +3,7 @@ import http from 'http';
 import https from 'https';
 import { URL } from 'url';
 import { Server } from 'socket.io';
-import { buildProxyHeaders, assertSafeUrl, request } from './server/net.js';
+import { buildProxyHeaders, assertSafeUrl, USER_AGENT } from './server/net.js';
 import { resolveVideoUrl, ResolveError } from './server/resolve.js';
 import { listSources, getSource, resolveDescriptor } from './server/sources/index.js';
 
@@ -141,38 +141,102 @@ app.get('/api/sources', (req, res) => {
     res.json({ sources: listSources() });
 });
 
-// Sunucunun hangi kaynak sitelere erişebildiğini gösterir (barındırma IP'si
-// engellenmiş mi vb. teşhis için). Gizli bilgi döndürmez.
+// Teşhis: sunucunun kaynak sitelere erişip erişemediğini, hangi çıkış IP'siyle
+// çıktığını ve engellenme yanıtının başlık/gövdesini gösterir. Gizli bilgi
+// döndürmez; bir sorun giderme aracıdır.
+const DIAG_TARGETS = [
+    { name: 'sezonlukdizi-home', url: 'https://sezonlukdizi.cc/', method: 'GET' },
+    {
+        name: 'sezonlukdizi-search',
+        url: 'https://sezonlukdizi.cc/ajax/arama.asp',
+        method: 'POST',
+        body: 'q=test',
+    },
+    { name: 'jetfilmizle-search', url: 'https://jetfilmizle.app/arama-json?q=test', method: 'GET' },
+    { name: 'jetfilmizle-home', url: 'https://jetfilmizle.app/', method: 'GET' },
+    { name: 'videopark-home', url: 'https://videopark.top/', method: 'GET' },
+];
+
+const DIAG_HEADER_KEYS = [
+    'server',
+    'cf-mitigated',
+    'cf-ray',
+    'cf-cache-status',
+    'location',
+    'content-type',
+    'x-powered-by',
+];
+
+async function diagProbe(target) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15000);
+    try {
+        const headers = {
+            'User-Agent': USER_AGENT,
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7',
+        };
+        if (target.body) headers['Content-Type'] = 'application/x-www-form-urlencoded; charset=UTF-8';
+
+        const response = await fetch(target.url, {
+            method: target.method,
+            headers,
+            body: target.method === 'GET' || target.method === 'HEAD' ? undefined : target.body,
+            redirect: 'manual',
+            signal: controller.signal,
+        });
+
+        const picked = {};
+        for (const key of DIAG_HEADER_KEYS) {
+            const value = response.headers.get(key);
+            if (value) picked[key] = value;
+        }
+
+        let snippet = '';
+        try {
+            snippet = (await response.text()).replace(/\s+/g, ' ').trim().slice(0, 240);
+        } catch {
+            /* gövde okunamadıysa önemli değil */
+        }
+
+        return { ok: response.status < 400, status: response.status, headers: picked, snippet };
+    } catch (err) {
+        return { ok: false, error: err?.name === 'AbortError' ? 'timeout' : err?.message || String(err) };
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+async function diagEgressIp(url) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    try {
+        const response = await fetch(url, { signal: controller.signal });
+        const data = await response.json().catch(() => null);
+        return data?.ip || null;
+    } catch (err) {
+        return err?.name === 'AbortError' ? 'timeout' : 'unavailable';
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
 app.get('/api/diag', async (req, res) => {
-    const checks = [
-        { name: 'sezonlukdizi-home', url: 'https://sezonlukdizi.cc/', method: 'GET' },
-        {
-            name: 'sezonlukdizi-search',
-            url: 'https://sezonlukdizi.cc/ajax/arama.asp',
-            method: 'POST',
-            body: 'q=test',
-        },
-        { name: 'jetfilmizle-search', url: 'https://jetfilmizle.app/arama-json?q=test', method: 'GET' },
-        { name: 'jetfilmizle-home', url: 'https://jetfilmizle.app/', method: 'GET' },
-        { name: 'videopark-home', url: 'https://videopark.top/', method: 'GET' },
-    ];
+    const [egressV4, egressV6] = await Promise.all([
+        diagEgressIp('https://api.ipify.org?format=json'),
+        diagEgressIp('https://api64.ipify.org?format=json'),
+    ]);
 
     const results = [];
-    for (const check of checks) {
-        try {
-            const response = await request(check.url, {
-                method: check.method,
-                body: check.body,
-                referer: new URL(check.url).origin + '/',
-                timeoutMs: 15000,
-            });
-            results.push({ name: check.name, ok: true, status: response.status, bytes: response.body.length });
-        } catch (err) {
-            results.push({ name: check.name, ok: false, error: err?.message || String(err) });
-        }
+    for (const target of DIAG_TARGETS) {
+        results.push({ name: target.name, ...(await diagProbe(target)) });
     }
 
-    res.json({ when: new Date().toISOString(), results });
+    res.json({
+        when: new Date().toISOString(),
+        egress: { ipv4: egressV4, ipv6: egressV6 },
+        results,
+    });
 });
 
 app.get('/api/search', async (req, res) => {
