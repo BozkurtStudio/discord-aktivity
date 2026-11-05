@@ -1,6 +1,7 @@
 import express from 'express';
 import http from 'http';
 import https from 'https';
+import { Readable } from 'stream';
 import { URL } from 'url';
 import { Server } from 'socket.io';
 import { buildProxyHeaders, assertSafeUrl, USER_AGENT, isRelayEnabled, relayFetch, relayInfo } from './server/net.js';
@@ -30,6 +31,14 @@ app.use(express.static('dist', {
 // Diski doldurmaz. Tarayıcının 'Range' isteklerini doğrudan kaynağa yollar.
 // ============================================================
 function proxyRequest(targetUrl, reqHeaders, res, referer = null, maxRedirects = 5) {
+    // Relay açıksa video baytlarını da relay üzerinden akıt. Aksi halde bazı
+    // CDN'ler barındırma sağlayıcısının (ör. Render) doğrudan IP'sini 403 ile
+    // engelliyor; relay bu engeli aşar.
+    if (isRelayEnabled()) {
+        proxyRequestViaRelay(targetUrl, reqHeaders, res, referer);
+        return;
+    }
+
     let parsedUrl;
     let options;
 
@@ -85,6 +94,55 @@ function proxyRequest(targetUrl, reqHeaders, res, referer = null, maxRedirects =
     res.on('close', () => {
         proxyReq.destroy();
     });
+}
+
+// Relay üzerinden saydam proxy. Aralık (Range) başlıkları ve 206 yanıtı
+// olduğu gibi korunur; gövde diske yazılmadan doğrudan tarayıcıya akıtılır.
+async function proxyRequestViaRelay(targetUrl, reqHeaders, res, referer = null) {
+    let headers;
+    try {
+        assertSafeUrl(targetUrl);
+        headers = buildProxyHeaders(targetUrl, {
+            range: reqHeaders.range,
+            referer,
+        });
+    } catch (err) {
+        if (!res.headersSent) res.status(400).send(err.message);
+        return;
+    }
+
+    let response;
+    try {
+        response = await relayFetch(targetUrl, { method: 'GET', headers });
+    } catch (err) {
+        console.error('Proxy (relay) Bağlantı Hatası:', err.message);
+        if (!res.headersSent) res.status(502).send('Bad Gateway');
+        return;
+    }
+
+    const safeHeaders = {
+        'Content-Type': response.headers.get('content-type') || 'video/mp4',
+        'Access-Control-Allow-Origin': '*',
+    };
+    for (const header of ['content-length', 'content-range', 'accept-ranges', 'cache-control']) {
+        const value = response.headers.get(header);
+        if (value) safeHeaders[header] = value;
+    }
+
+    res.writeHead(response.status, safeHeaders);
+
+    if (!response.body) {
+        res.end();
+        return;
+    }
+
+    const stream = Readable.fromWeb(response.body);
+    stream.on('error', err => {
+        console.error('Proxy (relay) akış hatası:', err.message);
+        res.destroy(err);
+    });
+    res.on('close', () => stream.destroy());
+    stream.pipe(res);
 }
 
 app.get('/proxy/stream', (req, res) => {
@@ -245,6 +303,58 @@ async function diagRelayProbe() {
         clearTimeout(timer);
     }
 }
+
+// GEÇİCİ teşhis ucu: Render/FRA'dan sezonlukdizi AJAX ucuna farklı başlık
+// varyasyonları gönderip hangisinin geçtiğini bulmak için. Kalıcı değildir.
+app.get('/api/ssprobe', async (req, res) => {
+    if (req.query.token !== 'ss-debug-7731') return res.status(404).send('Not found');
+
+    const target = 'https://sezonlukdizi.cc/ajax/dataAlternatif22.asp';
+    const body = 'bid=90276&dil=1';
+    const base = {
+        'User-Agent': USER_AGENT,
+        'Accept-Language': 'tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7',
+        'X-Requested-With': 'XMLHttpRequest',
+        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        'Referer': 'https://sezonlukdizi.cc/',
+    };
+    const jsonAccept = { ...base, Accept: 'application/json, text/javascript, */*; q=0.01' };
+
+    const variants = [
+        { name: 'baseline-html-accept', url: target, method: 'POST', body, headers: { ...base, Accept: 'text/html,application/xhtml+xml,*/*;q=0.8' } },
+        { name: 'accept-star', url: target, method: 'POST', body, headers: { ...base, Accept: '*/*' } },
+        { name: 'accept-json-secfetch', url: target, method: 'POST', body, headers: { ...jsonAccept, 'Sec-Fetch-Site': 'same-origin', 'Sec-Fetch-Mode': 'cors', 'Sec-Fetch-Dest': 'empty' } },
+        { name: 'no-xrw-accept-star', url: target, method: 'POST', body, headers: { 'User-Agent': USER_AGENT, 'Accept': '*/*', 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8', 'Referer': 'https://sezonlukdizi.cc/' } },
+        { name: 'origin-json', url: target, method: 'POST', body, headers: { ...jsonAccept, Origin: 'https://sezonlukdizi.cc' } },
+        { name: 'cachebust-json', url: `${target}?_=${Date.now()}`, method: 'POST', body, headers: { ...jsonAccept } },
+        { name: 'get-query', url: `${target}?bid=90276&dil=1`, method: 'GET', headers: base },
+        { name: 'post-json-body', url: target, method: 'POST', body: JSON.stringify({ bid: '90276', dil: '1' }), headers: { ...jsonAccept, 'Content-Type': 'application/json' } },
+    ];
+
+    const results = [];
+    for (const variant of variants) {
+        try {
+            const init = {
+                method: variant.method,
+                headers: variant.headers,
+                body: variant.method === 'GET' ? undefined : variant.body,
+            };
+            const response = isRelayEnabled()
+                ? await relayFetch(variant.url, init)
+                : await fetch(variant.url, { ...init, redirect: 'manual' });
+            const snippet = (await response.text()).replace(/\s+/g, ' ').slice(0, 90);
+            results.push({
+                name: variant.name,
+                status: response.status,
+                ray: response.headers.get('cf-ray'),
+                snippet,
+            });
+        } catch (err) {
+            results.push({ name: variant.name, error: err.message });
+        }
+    }
+    res.json(results);
+});
 
 app.get('/api/diag', async (req, res) => {
     const [egressV4, egressV6] = await Promise.all([
